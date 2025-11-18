@@ -1,220 +1,144 @@
+﻿/**
+ * GESTIÓN DE HERBARIO - SERVICIO BACKEND
+ * ======================================
+ *
+ * Servicio principal para la gestión del herbario digital.
+ * Maneja clasificaciones taxonómicas, paquetes, muestras y administración.
+ *
+ * PUERTOS:
+ * - 3002: Servicio principal (Gest_Herb_service)
+ * - 3001: Servicio de autenticación (Auth_Service)
+ * - 4000: Servicio externo de conglomerados
+ *
+ * FUNCIONALIDADES:
+ * - Gestión de clasificaciones taxonómicas
+ * - Administración de paquetes y muestras
+ * - Catálogo taxonómico jerárquico
+ * - Ubicaciones geográficas
+ * - Panel de administración
+ * - Actualización automática de estados de paquete
+ *
+ * AUTOR: Proyecto Integrador 2 - Software Herbario
+ * FECHA: 2025-11-17
+ * VERSIÓN: 2.0.0
+ */
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { supabase } from './supabase.js';
+import { externalApiClient } from './externalApiClient.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Test Supabase connection
-console.log('[Gest_Herb_service] Probando conexión a Supabase...');
-console.log('[Gest_Herb_service] URL:', process.env.SUPABASE_URL);
-console.log('[Gest_Herb_service] Key:', process.env.SUPABASE_ANON_KEY ? 'Configurada' : 'No configurada');
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+// ===== CONFIGURACIÓN DE LOGGING =====
+let logger;
+try {
+  const { createLogger } = await import('../../shared/logger/index.js');
+  logger = createLogger('Gest_Herb_service');
+  logger.info('Logger inicializado correctamente');
+} catch (error) {
+  console.warn('⚠️  Logger no disponible, usando console:', error.message);
+  logger = {
+    info: console.log,
+    warn: console.warn,
+    error: console.error,
+    debug: console.log,
+    middleware: (req, res, next) => next()
+  };
+}
+
+// ===== CONEXIÓN A SUPABASE =====
+logger.info('Probando conexión a Supabase...', {
+  url: process.env.SUPABASE_URL,
+  hasKey: !!process.env.SUPABASE_ANON_KEY
+});
 
 supabase.from('region').select('*').limit(1)
   .then(({ data, error }) => {
     if (error) {
-      console.error('[Gest_Herb_service] Error conectando a Supabase (public):', error);
-      console.error('[Gest_Herb_service] Detalles del error:', error.message);
-      console.error('[Gest_Herb_service] Código del error:', error.code);
+      logger.error('Error conectando a Supabase', {
+        message: error.message,
+        code: error.code
+      });
     } else {
-      console.log(`[Gest_Herb_service] ✅ Conexión a Supabase exitosa!`);
-      console.log(`[Gest_Herb_service] Datos de prueba:`, data);
+      logger.info('✅ Conexión a Supabase exitosa', {
+        datosCount: data?.length || 0
+      });
     }
   })
   .catch(err => {
-    console.error('[Gest_Herb_service] Error general:', err);
+    logger.error('Error general al conectar Supabase', { error: err.message });
   });
 
+// ===== CONFIGURACIÓN DE EXPRESS =====
 const app = express();
-app.use(express.json());
+
+app.set('logger', logger); // Hacer logger accesible en el middleware
+app.use(express.json({ charset: 'utf-8' }));
+app.use(express.urlencoded({ extended: true, charset: 'utf-8' }));
 app.use(cors());
 app.use(helmet());
 
+// Configurar charset UTF-8 para todas las respuestas
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
+
+app.use(logger.expressMiddleware());
+
+// Rate limiting: 100 requests por 15 minutos
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use(limiter);
 
-// Health check
+// ===== ENDPOINTS PRINCIPALES =====
+
+// Health check básico
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-// ===== EVENTOS DE COLECCIÓN =====
-app.post('/eventos', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('evento_coleccion')
-      .insert(req.body)
-      .select('id')
-      .single();
-
-    if (error) {
-      console.error('Error creando evento:', error);
-      return res.status(500).json({ error: 'Error creando evento de colección' });
-    }
-
-    res.status(201).json({ id: data.id });
-  } catch (err) {
-    console.error('Error en POST /eventos:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/eventos/:id', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('evento_coleccion')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-
-    if (error) {
-      return res.status(404).json({ error: 'Evento no encontrado' });
-    }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /eventos/:id:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
+// ===== CONGLOMERADOS =====
 
 // ===== PAQUETES =====
-app.post('/paquetes', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('paquete')
-      .insert(req.body)
-      .select('id')
-      .single();
-
-    if (error) {
-      console.error('Error creando paquete:', error);
-      return res.status(500).json({ error: 'Error creando paquete' });
-    }
-
-    res.status(201).json({ id: data.id });
-  } catch (err) {
-    console.error('Error en POST /paquetes:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/paquetes', async (req, res) => {
-  try {
-    const { page = 1, limit = 50 } = req.query;
-    const offset = (page - 1) * limit;
-
-    const { data, error } = await supabase
-      .from('paquete')
-      .select(`
-        *,
-        evento_coleccion!inner(
-          id,
-          fecha_coleccion_inicio,
-          fecha_coleccion_fin,
-          conglomerado!inner(
-            id,
-            codigo,
-            municipio!inner(
-              nombre,
-              departamento!inner(
-                nombre
-              )
-            )
-          )
-        )
-      `)
-      .order('id', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      console.error('Error obteniendo paquetes:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      return res.status(500).json({ error: 'Error obteniendo paquetes', details: error });
-    }
-    
-    console.log('Paquetes obtenidos exitosamente:', data?.length || 0, 'registros');
-
-    // Transformar datos para el frontend
-    const paquetesTransformados = data.map(paquete => ({
-      ...paquete,
-      fecha_coleccion: paquete.evento_coleccion?.fecha_coleccion_inicio || paquete.fecha_envio || null,
-      fecha_registro: paquete.fecha_recibido_herbario || null,
-      total_muestras: paquete.cantidad_ejemplares || 0,
-      conglomerado_nombre: paquete.evento_coleccion?.conglomerado ? 
-        `${paquete.evento_coleccion.conglomerado.codigo} - ${paquete.evento_coleccion.conglomerado.municipio.nombre}, ${paquete.evento_coleccion.conglomerado.municipio.departamento.nombre}` : 
-        'No especificado',
-      estado: 'recibido',
-      estado_texto: 'Recibido'
-    }));
-
-    res.json(paquetesTransformados);
-  } catch (err) {
-    console.error('Error en GET /paquetes:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/paquetes/:id', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('paquete')
-      .select(`
-        *,
-        evento_coleccion(*),
-        muestra_botanica(*)
-      `)
-      .eq('id', req.params.id)
-      .single();
-
-    if (error) {
-      return res.status(404).json({ error: 'Paquete no encontrado' });
-    }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /paquetes/:id:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
 
 // ===== MUESTRAS BOTÁNICAS =====
-app.post('/muestras', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('muestra_botanica')
-      .insert(req.body)
-      .select('id');
 
-    if (error) {
-      console.error('Error creando muestras:', error);
-      return res.status(500).json({ error: 'Error creando muestras' });
-    }
-
-    res.status(201).json({ insertedIds: data.map(m => m.id) });
-  } catch (err) {
-    console.error('Error en POST /muestras:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
+/**
+ * GET /muestras/pendientes
+ * Obtiene muestras botánicas pendientes de clasificación taxonómica
+ * @param {string} [req.query.conglomerado] - Filtro por conglomerado
+ * @param {number} [req.query.limit=50] - Límite de resultados
+ * @param {number} [req.query.offset=0] - Offset para paginación
+ * @returns {Array} Lista de muestras pendientes con datos enriquecidos
+ */
 app.get('/muestras/pendientes', async (req, res) => {
   try {
     const { conglomerado, limit = 50, offset = 0 } = req.query;
     
-    // PASO 1: Obtener IDs de muestras que YA tienen clasificación
+    // PASO 1: Obtener IDs de muestras que YA tienen clasificación (cualquier estado)
+    // Excluir todas las muestras que tengan borrador, en_analisis, firmado o completado
     const { data: muestrasConClasificacion, error: errorClasificadas } = await supabase
       .from('clasificacion_herbario')
-      .select('id_muestra');
+      .select('id_muestra')
+      .in('estado', ['borrador', 'en_analisis', 'firmado', 'completado']);
 
     if (errorClasificadas) {
       console.error('Error obteniendo muestras clasificadas:', errorClasificadas);
-      return res.status(500).json({ error: 'Error obteniendo muestras' });
+      return res.status(500).json({ error: 'Error obteniendo muestras clasificadas', details: errorClasificadas });
     }
 
-    const idsConClasificacion = muestrasConClasificacion.map(c => c.id_muestra);
+    const idsConClasificacion = muestrasConClasificacion?.map(c => c.id_muestra) || [];
+    console.log(`Muestras con clasificación a excluir: ${idsConClasificacion.length}`);
 
-    // PASO 2: Consultar muestras que NO están en la lista de clasificadas
+    // PASO 2: Consultar muestras que NO están clasificadas
+    // SOLO OBTENER CÓDIGO DE CONGLOMERADO (datos completos vienen del servicio externo)
     let query = supabase
       .from('muestra_botanica')
       .select(`
@@ -224,71 +148,74 @@ app.get('/muestras/pendientes', async (req, res) => {
         colector,
         observaciones,
         fecha_coleccion,
-        paquete!inner(
+        id_paquete,
+        paquete(
           id,
           num_paquete,
           fecha_recibido_herbario,
-          evento_coleccion!inner(
-            id,
-            descripcion,
-            fecha_coleccion_inicio,
-            conglomerado!inner(
-              codigo, 
-              municipio!inner(
-                nombre,
-                departamento!inner(nombre)
-              )
-            )
-          )
+          id_conglomerado,
+          conglomerado(codigo)
         )
       `)
+      .not('id_paquete', 'is', null)
       .order('id', { ascending: true });
 
-    // Excluir muestras que ya tienen clasificación
+    // Excluir muestras que ya tienen clasificación (cualquier estado)
     if (idsConClasificacion.length > 0) {
       query = query.not('id', 'in', `(${idsConClasificacion.join(',')})`);
     }
 
-    // Filtro opcional por conglomerado
-    if (conglomerado) {
-      query = query.eq('paquete.evento_coleccion.conglomerado.codigo', conglomerado);
-    }
-
-    const { data, error } = await query
-      .range(offset, offset + limit - 1);
+    const { data, error } = await query.range(offset, offset + limit - 1);
 
     if (error) {
       console.error('Error obteniendo muestras pendientes:', error);
-      return res.status(500).json({ error: 'Error obteniendo muestras' });
+      return res.status(500).json({ error: 'Error obteniendo muestras', details: error });
     }
 
-    res.json(data);
+    // PASO 3: Obtener datos completos de conglomerados desde SERVICIO EXTERNO
+    const codigosConglomerado = [...new Set(
+      data
+        .filter(m => m.paquete?.conglomerado?.codigo)
+        .map(m => m.paquete.conglomerado.codigo)
+    )];
+
+    console.log(`Conglomerados únicos a consultar en servicio externo: ${codigosConglomerado.length}`);
+
+    let conglomeradosMap = {};
+    if (codigosConglomerado.length > 0) {
+      try {
+        conglomeradosMap = await externalApiClient.obtenerConglomeradosPorCodigos(codigosConglomerado);
+        console.log(`✅ Conglomerados obtenidos del servicio externo: ${Object.keys(conglomeradosMap).length}`);
+      } catch (error) {
+        console.warn('⚠️ No se pudo conectar con servicio externo (puerto 4000), usando solo códigos:', error.message);
+      }
+    }
+
+    // PASO 4: Enriquecer datos con información de conglomerados del servicio externo
+    const muestrasEnriquecidas = data.map(muestra => {
+      if (!muestra.paquete?.conglomerado?.codigo) {
+        return muestra;
+      }
+
+      const codigoConglomerado = muestra.paquete.conglomerado.codigo;
+      const datosExternos = conglomeradosMap[codigoConglomerado];
+
+      if (datosExternos) {
+        // Reemplazar datos de conglomerado con información del servicio externo
+        // INCLUYE municipio y departamento obtenidos de Supabase local
+        muestra.paquete.conglomerado = {
+          codigo: datosExternos.codigo,
+          municipio: datosExternos.municipio || { nombre: 'N/A', departamento: { nombre: 'N/A' } }
+        };
+      }
+
+      return muestra;
+    });
+
+    res.json(muestrasEnriquecidas);
   } catch (err) {
     console.error('Error en GET /muestras/pendientes:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/muestras/:id', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('muestra_botanica')
-      .select(`
-        *,
-        paquete(*),
-        clasificacion_taxonomica(*)
-      `)
-      .eq('id', req.params.id)
-      .single();
-
-    if (error) {
-      return res.status(404).json({ error: 'Muestra no encontrada' });
-    }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /muestras/:id:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    res.status(500).json({ error: 'Error interno del servidor', message: err.message });
   }
 });
 
@@ -314,6 +241,244 @@ app.put('/muestras/:id', async (req, res) => {
 });
 
 // ===== CLASIFICACIONES TAXONÓMICAS =====
+
+/**
+ * GET /muestras/estado/:estado
+ * Obtiene muestras clasificadas filtradas por estado
+ * @param {string} estado - Estado de clasificación (pendiente, en_analisis, borrador, firmado, completado)
+ * @param {number} [req.query.limit=50] - Límite de resultados
+ * @param {number} [req.query.offset=0] - Offset para paginación
+ * @returns {Array} Lista de muestras clasificadas con información taxonómica
+ */
+app.get('/muestras/estado/:estado', async (req, res) => {
+  try {
+    const { estado } = req.params
+    const { limit = 50, offset = 0 } = req.query
+
+    // Validar estado
+    const estadosValidos = ['pendiente', 'en_analisis', 'borrador', 'firmado', 'completado']
+    if (!estadosValidos.includes(estado)) {
+      return res.status(400).json({ error: 'Estado inválido' })
+    }
+
+    const { data, error } = await supabase
+      .from('clasificacion_herbario')
+      .select(`
+        id,
+        id_muestra,
+        id_especie,
+        estado,
+        estado_reproductivo,
+        id_foto,
+        id_determinador,
+        created_at,
+        muestra:id_muestra(
+          id,
+          num_coleccion,
+          num_individuo,
+          colector,
+          paquete!inner(
+            num_paquete,
+            fecha_recibido_herbario,
+            conglomerado(codigo)
+          )
+        ),
+        especie:id_especie(
+          nombre,
+          nombre_comun,
+          genero(
+            nombre,
+            familia(nombre)
+          )
+        ),
+        archivos:id_foto(path, name)
+      `)
+      .eq('estado', estado)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (error) {
+      console.error('Error obteniendo clasificaciones:', error)
+      return res.status(500).json({ error: 'Error obteniendo clasificaciones', details: error })
+    }
+
+    // Obtener códigos únicos de conglomerados
+    const codigosConglomerado = [...new Set(
+      data
+        .filter(c => c.muestra?.paquete?.conglomerado?.codigo)
+        .map(c => c.muestra.paquete.conglomerado.codigo)
+    )]
+
+    // Obtener datos completos de conglomerados desde servicio externo
+    let conglomeradosMap = {}
+    if (codigosConglomerado.length > 0) {
+      try {
+        conglomeradosMap = await externalApiClient.obtenerConglomeradosPorCodigos(codigosConglomerado)
+        console.log(`✅ Conglomerados obtenidos del servicio externo: ${Object.keys(conglomeradosMap).length}`)
+      } catch (error) {
+        console.warn('Error obteniendo conglomerados del servicio externo:', error.message)
+      }
+    }
+
+    // Mapear datos a formato frontend
+    const muestras = (data || []).map(clasificacion => {
+      const codigoConglomerado = clasificacion.muestra?.paquete?.conglomerado?.codigo
+      const conglomeradoExterno = codigoConglomerado ? conglomeradosMap[codigoConglomerado] : null
+
+      return {
+        id: clasificacion.muestra?.id,
+        id_clasificacion: clasificacion.id,
+        num_coleccion: clasificacion.muestra?.num_coleccion,
+        num_individuo: clasificacion.muestra?.num_individuo,
+        codigo: clasificacion.muestra?.num_coleccion,
+        paquete_numero: clasificacion.muestra?.paquete?.num_paquete,
+        colector: clasificacion.muestra?.colector,
+        fecha_recepcion: clasificacion.muestra?.paquete?.fecha_recibido_herbario || '--',
+        nombre_conglomerado: conglomeradoExterno && conglomeradoExterno.municipio
+          ? `${conglomeradoExterno.codigo} - ${conglomeradoExterno.municipio.nombre}, ${conglomeradoExterno.municipio.departamento?.nombre || conglomeradoExterno.municipio.nombre}`
+          : (codigoConglomerado ? codigoConglomerado : 'Sin conglomerado'),
+        paquete: {
+          conglomerado: conglomeradoExterno || { codigo: codigoConglomerado }
+        },
+        estado: clasificacion.estado,
+        especie_nombre: clasificacion.especie?.nombre || 'No identificada',
+        familia: clasificacion.especie?.genero?.familia?.nombre || '--',
+        genero: clasificacion.especie?.genero?.nombre || '--',
+        estado_reproductivo: clasificacion.estado_reproductivo,
+        foto: clasificacion.archivos ? {
+          path: clasificacion.archivos.path,
+          nombre: clasificacion.archivos.name
+        } : null,
+        id_determinador: clasificacion.id_determinador,
+        fecha_clasificacion: clasificacion.created_at
+      }
+    })
+
+    res.json(muestras)
+  } catch (err) {
+    console.error('Error en GET /muestras/estado/:estado:', err)
+    res.status(500).json({ error: 'Error interno del servidor', message: err.message })
+  }
+})
+
+/**
+ * GET /clasificaciones/:id
+ * Obtiene una clasificación específica por su ID
+ * @param {string} id - ID de la clasificación
+ * @returns {Object} Clasificación con información de archivo si existe
+ */
+app.get('/clasificaciones/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    
+    // Obtener la clasificación
+    const { data: clasificacion, error: errorClasificacion } = await supabase
+      .from('clasificacion_herbario')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (errorClasificacion) {
+      console.error('Error obteniendo clasificación:', errorClasificacion)
+      return res.status(404).json({ error: 'Clasificación no encontrada' })
+    }
+
+    // Si tiene id_foto, obtener los datos del archivo
+    if (clasificacion.id_foto) {
+      const { data: archivo, error: errorArchivo } = await supabase
+        .from('archivos')
+        .select('*')
+        .eq('id', clasificacion.id_foto)
+        .single()
+      
+      if (!errorArchivo && archivo) {
+        clasificacion.archivos = archivo
+      }
+    }
+
+    res.json(clasificacion)
+  } catch (err) {
+    console.error('Error en GET /clasificaciones/:id:', err)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+})
+
+/**
+ * GET /archivos/:id
+ * Obtiene información de un archivo por su ID
+ * @param {string} id - ID del archivo
+ * @returns {Object} Información del archivo
+ */
+app.get('/archivos/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { data, error } = await supabase
+      .from('archivos')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (error) {
+      console.error('Error obteniendo archivo:', error)
+      return res.status(404).json({ error: 'Archivo no encontrado' })
+    }
+
+    res.json(data)
+  } catch (err) {
+    console.error('Error en GET /archivos/:id:', err)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+})
+
+/**
+ * GET /clasificaciones/muestra/:muestraId
+ * Obtiene la clasificación existente para una muestra específica
+ * @param {string} muestraId - ID de la muestra
+ * @returns {Object|null} Clasificación existente o null si no existe
+ */
+app.get('/clasificaciones/muestra/:muestraId', async (req, res) => {
+  try {
+    const { muestraId } = req.params;
+    const muestraIdNum = parseInt(muestraId, 10);
+    
+    if (isNaN(muestraIdNum)) {
+      return res.status(400).json({ error: 'ID de muestra inválido' });
+    }
+    
+    const { data, error } = await supabase
+      .from('clasificacion_herbario')
+      .select('*')
+      .eq('id_muestra', muestraIdNum)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Error obteniendo clasificación:', error);
+      return res.status(500).json({ error: 'Error obteniendo clasificación' });
+    }
+
+    // Si no existe clasificación, retornar null
+    if (error && error.code === 'PGRST116') {
+      return res.json(null);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Error en GET /clasificaciones/muestra/:muestraId:', err);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+/**
+ * POST /clasificaciones
+ * Crea una nueva clasificación taxonómica para una muestra
+ * @param {Object} req.body - Datos de la clasificación
+ * @param {number} req.body.id_muestra - ID de la muestra a clasificar
+ * @param {number} [req.body.id_especie] - ID de la especie identificada
+ * @param {string} [req.body.estado_reproductivo] - Estado reproductivo
+ * @param {number} [req.body.id_foto] - ID del archivo de imagen
+ * @param {number} [req.body.id_determinador] - ID del determinador
+ * @returns {Object} ID de la clasificación creada
+ */
 app.post('/clasificaciones', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -324,7 +489,30 @@ app.post('/clasificaciones', async (req, res) => {
 
     if (error) {
       console.error('Error creando clasificación:', error);
-      return res.status(500).json({ error: 'Error creando clasificación' });
+      
+      // DETECTAR ERROR DE TRIGGER: trg_validar_clasificacion_unica
+      if (error.message && error.message.includes('ya tiene una clasificación en proceso')) {
+        return res.status(409).json({ 
+          error: 'Clasificación duplicada',
+          mensaje: error.message,
+          detalle: 'Esta muestra ya tiene una clasificación en estado borrador o en_analisis. Use la opción de actualizar en lugar de crear nueva.'
+        });
+      }
+      
+      // DETECTAR ERROR DE TRIGGER: trg_validar_num_individuo_unico
+      if (error.message && error.message.includes('ya fue clasificado en otra muestra')) {
+        return res.status(409).json({ 
+          error: 'Individuo duplicado',
+          mensaje: error.message,
+          detalle: 'Este num_individuo ya fue clasificado previamente. Puede haber muestras duplicadas en el sistema.'
+        });
+      }
+      
+      // Retornar el error real de Supabase para debugging
+      return res.status(500).json({ 
+        error: 'Error creando clasificación',
+        detalle: error.message || error.hint || JSON.stringify(error)
+      });
     }
 
     res.status(201).json({ id: data.id });
@@ -334,23 +522,395 @@ app.post('/clasificaciones', async (req, res) => {
   }
 });
 
-app.get('/clasificaciones/muestra/:muestraId', async (req, res) => {
+// Actualizar clasificación existente (borrador)
+app.put('/clasificaciones/:id', async (req, res) => {
   try {
+    const { id } = req.params;
     const { data, error } = await supabase
-      .from('clasificacion_taxonomica')
-      .select('*')
-      .eq('id_muestra_botanica', req.params.muestraId)
-      .order('fecha_clasificacion', { ascending: false });
+      .from('clasificacion_herbario')
+      .update(req.body)
+      .eq('id', id)
+      .select('id')
+      .single();
 
     if (error) {
-      console.error('Error obteniendo clasificaciones:', error);
-      return res.status(500).json({ error: 'Error obteniendo clasificaciones' });
+      console.error('Error actualizando clasificación:', error);
+      return res.status(500).json({ error: 'Error actualizando clasificación' });
     }
 
-    res.json(data);
+    res.json({ id: data.id, message: 'Clasificación actualizada' });
   } catch (err) {
-    console.error('Error en GET /clasificaciones/muestra/:muestraId:', err);
+    console.error('Error en PUT /clasificaciones/:id:', err);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+/**
+ * PUT /clasificaciones/muestra/:muestraId
+ * Actualiza la clasificación existente para una muestra, o crea una nueva si no existe
+ * @param {string} muestraId - ID de la muestra
+ * @param {Object} req.body - Datos de la clasificación a actualizar/crear
+ * @returns {Object} ID de la clasificación actualizada o creada
+ */
+app.put('/clasificaciones/muestra/:muestraId', async (req, res) => {
+  try {
+    const { muestraId } = req.params;
+    const muestraIdNum = parseInt(muestraId, 10);
+    
+    if (isNaN(muestraIdNum)) {
+      return res.status(400).json({ error: 'ID de muestra inválido' });
+    }
+    
+    // Primero verificar si existe una clasificación para esta muestra
+    const { data: existing, error: findError } = await supabase
+      .from('clasificacion_herbario')
+      .select('id, estado')
+      .eq('id_muestra', muestraIdNum)
+      .single();
+
+    if (findError && findError.code !== 'PGRST116') {
+      console.error('Error buscando clasificación existente:', findError);
+      return res.status(500).json({ error: 'Error buscando clasificación existente' });
+    }
+
+    if (existing) {
+      // Si existe, verificar que esté en estado editable
+      if (!['borrador', 'en_analisis'].includes(existing.estado)) {
+        return res.status(409).json({ 
+          error: 'Clasificación no editable',
+          mensaje: `La clasificación existente tiene estado '${existing.estado}' y no puede ser modificada.`,
+          detalle: 'Solo se pueden editar clasificaciones en estado borrador o en_analisis.'
+        });
+      }
+
+      // Actualizar la clasificación existente
+      const { data, error } = await supabase
+        .from('clasificacion_herbario')
+        .update(req.body)
+        .eq('id', existing.id)
+        .select('id')
+        .single();
+
+      if (error) {
+        console.error('Error actualizando clasificación existente:', error);
+        return res.status(500).json({ error: 'Error actualizando clasificación' });
+      }
+
+      return res.json({ id: data.id, message: 'Clasificación actualizada', action: 'updated' });
+    } else {
+      // Si no existe, crear nueva clasificación
+      const { data, error } = await supabase
+        .from('clasificacion_herbario')
+        .insert({ ...req.body, id_muestra: muestraIdNum })
+        .select('id')
+        .single();
+
+      if (error) {
+        console.error('Error creando nueva clasificación:', error);
+        
+        // DETECTAR ERROR DE TRIGGER: trg_validar_clasificacion_unica
+        if (error.message && error.message.includes('ya tiene una clasificación en proceso')) {
+          return res.status(409).json({ 
+            error: 'Clasificación duplicada',
+            mensaje: error.message,
+            detalle: 'Esta muestra ya tiene una clasificación en estado borrador o en_analisis'
+          });
+        }
+        
+        // DETECTAR ERROR DE TRIGGER: trg_validar_num_individuo_unico
+        if (error.message && error.message.includes('ya fue clasificado en otra muestra')) {
+          return res.status(409).json({ 
+            error: 'Individuo duplicado',
+            mensaje: error.message,
+            detalle: 'Este num_individuo ya fue clasificado previamente. Puede haber muestras duplicadas en el sistema.'
+          });
+        }
+        
+        return res.status(500).json({ 
+          error: 'Error creando clasificación',
+          detalle: error.message || error.hint || JSON.stringify(error)
+        });
+      }
+
+      return res.status(201).json({ id: data.id, message: 'Clasificación creada', action: 'created' });
+    }
+  } catch (err) {
+    console.error('Error en PUT /clasificaciones/muestra/:muestraId:', err);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Actualizar solo el estado de una clasificación
+app.put('/clasificaciones/:idMuestra/estado', async (req, res) => {
+  try {
+    const { idMuestra } = req.params;
+    const idMuestraNum = parseInt(idMuestra, 10);
+    
+    if (isNaN(idMuestraNum)) {
+      return res.status(400).json({ error: 'ID de muestra inválido' });
+    }
+    
+    const { estado } = req.body;
+
+    if (!estado) {
+      return res.status(400).json({ error: 'Estado es requerido' });
+    }
+
+    logger.info(`🔄 Actualizando estado de muestra ${idMuestraNum} a '${estado}'`);
+
+    // Primero buscar si existe una clasificación para esta muestra
+    const { data: existing, error: findError } = await supabase
+      .from('clasificacion_herbario')
+      .select('id, estado, id_muestra')
+      .eq('id_muestra', idMuestraNum)
+      .single();
+
+    if (findError && findError.code !== 'PGRST116') {
+      logger.error('Error buscando clasificación:', findError);
+      return res.status(500).json({ error: 'Error buscando clasificación', details: findError.message });
+    }
+
+    // Si existe, actualizar
+    if (existing) {
+      logger.info(`📋 Clasificación existente encontrada (ID: ${existing.id}, estado actual: ${existing.estado})`);
+      
+      const { data, error } = await supabase
+        .from('clasificacion_herbario')
+        .update({ estado })
+        .eq('id', existing.id)
+        .select('id, id_muestra')
+        .single();
+
+      if (error) {
+        logger.error('Error actualizando estado:', error);
+        return res.status(500).json({ error: 'Error actualizando estado', details: error.message });
+      }
+
+      // ✅ ACTUALIZAR PAQUETE EN BACKGROUND (sin esperar)
+      actualizarEstadoPaqueteManual(data.id_muestra).catch(err => {
+        logger.warn('Error en actualización de paquete (background):', err.message);
+      });
+
+      logger.info(`✅ Estado actualizado correctamente a '${estado}'`);
+      return res.json({ id: data.id, estado, message: 'Estado actualizado' });
+    } else {
+      // Si no existe, crear nueva clasificación con el estado
+      logger.info(`📝 No existe clasificación previa. Creando nueva con estado '${estado}'`);
+      
+      const { data, error } = await supabase
+        .from('clasificacion_herbario')
+        .insert({ 
+          id_muestra: idMuestraNum, 
+          estado,
+          id_especie: null,
+          estado_reproductivo: null
+        })
+        .select('id, id_muestra')
+        .single();
+
+      if (error) {
+        logger.error('Error creando clasificación con estado:', error);
+        return res.status(500).json({ error: 'Error creando clasificación', details: error.message });
+      }
+
+      // ✅ ACTUALIZAR PAQUETE EN BACKGROUND (sin esperar)
+      actualizarEstadoPaqueteManual(data.id_muestra).catch(err => {
+        logger.warn('Error en actualización de paquete (background):', err.message);
+      });
+
+      logger.info(`✅ Clasificación creada correctamente con estado '${estado}'`);
+      return res.status(201).json({ id: data.id, estado, message: 'Clasificación creada' });
+    }
+  } catch (err) {
+    logger.error('Error en PUT /clasificaciones/:idMuestra/estado:', err);
+    res.status(500).json({ error: 'Error interno del servidor', details: err.message });
+  }
+});
+
+// ✅ FUNCIÓN AUXILIAR: Actualizar estado del paquete (SIN TRIGGERS) - OPTIMIZADA
+/**
+ * FUNCIÓN OPTIMIZADA PARA ACTUALIZACIÓN AUTOMÁTICA DE ESTADO DE PAQUETE
+ * ====================================================================
+ *
+ * Función que actualiza automáticamente el estado de un paquete basado en el estado
+ * de todas sus clasificaciones. Reemplaza la lógica de triggers de base de datos.
+ *
+ * LLAMADA DESDE:
+ * - PUT /clasificaciones/id/:id/estado (en background)
+ * - PUT /clasificaciones/:idMuestra/estado (en background)
+ *
+ * LÓGICA DE ESTADO DE PAQUETE:
+ * - recibido: Estado inicial cuando llega el paquete
+ * - en_proceso: Al menos una clasificación está en 'en_analisis' o 'borrador'
+ * - completo: TODAS las clasificaciones están en 'completado', 'firmado' o 'clasificado'
+ *
+ * OPTIMIZACIONES IMPLEMENTADAS:
+ * - Una sola query para obtener todas las muestras del paquete con sus clasificaciones
+ * - Procesamiento en memoria para contar estados
+ * - Actualización condicional solo si el estado cambia
+ * - Logging detallado para debugging
+ * - Manejo robusto de errores sin detener el flujo principal
+ *
+ * @param {number} idMuestra - ID de la muestra cuya clasificación cambió
+ * @param {Object} [logger] - Instancia del logger (opcional, usa console si no se proporciona)
+ */
+async function actualizarEstadoPaqueteManual(idMuestra) {
+  try {
+    // Obtener el paquete de la muestra
+    const { data: muestra, error: errorMuestra } = await supabase
+      .from('muestra_botanica')
+      .select('id_paquete')
+      .eq('id', idMuestra)
+      .single();
+
+    if (errorMuestra || !muestra || !muestra.id_paquete) {
+      logger.debug('Muestra sin paquete o no encontrada');
+      return;
+    }
+
+    const idPaquete = muestra.id_paquete;
+
+    // UNA SOLA QUERY: Obtener todas las muestras del paquete con sus clasificaciones
+    const { data: muestrasConClasificaciones, error: errorMuestras } = await supabase
+      .from('muestra_botanica')
+      .select(`
+        id,
+        clasificacion_herbario!left(estado)
+      `)
+      .eq('id_paquete', idPaquete);
+
+    if (errorMuestras || !muestrasConClasificaciones) {
+      logger.warn('Error obteniendo muestras:', errorMuestras?.message);
+      return;
+    }
+
+    const totalMuestras = muestrasConClasificaciones.length;
+
+    // Contar completadas en UNA pasada
+    let completadas = 0;
+    let enProceso = 0;
+
+    muestrasConClasificaciones.forEach(muestra => {
+      if (muestra.clasificacion_herbario && muestra.clasificacion_herbario.length > 0) {
+        const estado = muestra.clasificacion_herbario[0].estado;
+        if (['completado', 'firmado', 'clasificado'].includes(estado)) {
+          completadas++;
+        } else if (['en_analisis', 'borrador'].includes(estado)) {
+          enProceso++;
+        }
+      }
+    });
+
+    // Determinar nuevo estado del paquete
+    let nuevoEstado = 'recibido';
+    if (totalMuestras > 0 && completadas === totalMuestras) {
+      nuevoEstado = 'completo';
+    } else if (enProceso > 0) {
+      nuevoEstado = 'en_proceso';
+    }
+
+    // Actualizar paquete
+    const { error: errorActualizacion } = await supabase
+      .from('paquete')
+      .update({ estado: nuevoEstado })
+      .eq('id', idPaquete);
+
+    if (errorActualizacion) {
+      logger.warn('Error actualizando paquete:', errorActualizacion.message);
+      return;
+    }
+
+    logger.debug('✅ Paquete actualizado', {
+      id_paquete: idPaquete,
+      nuevo_estado: nuevoEstado,
+      total_muestras: totalMuestras,
+      completadas
+    });
+
+  } catch (err) {
+    logger.warn('Error en actualizarEstadoPaqueteManual:', err.message);
+  }
+}
+
+// ENDPOINT: Actualizar estado por ID de clasificación (usado por frontend)
+/**
+ * ENDPOINT ULTRA-RÁPIDO PARA CAMBIO DE ESTADO DE CLASIFICACIÓN
+ * ===========================================================
+ *
+ * Endpoint optimizado para cambiar el estado de clasificaciones taxonómicas.
+ * Responde inmediatamente al frontend mientras procesa la actualización de paquete en background.
+ *
+ * USADO POR: LaboratorioDashboard.vue - funciones firmarClasificacion() y cerrarClasificacion()
+ *
+ * Estados válidos:
+ * - borrador: Estado inicial de clasificación
+ * - firmado: Clasificación firmada por especialista (requiere validación de contraseña)
+ * - completado: Clasificación finalizada y cerrada
+ *
+ * Flujo de trabajo:
+ * 1. borrador → firmado (con validación de contraseña)
+ * 2. firmado → completado (cierre final)
+ *
+ * @param {string} req.params.id - ID de la clasificación a actualizar
+ * @param {Object} req.body - Datos de la solicitud
+ * @param {string} req.body.estado - Nuevo estado ('firmado' o 'completado')
+ * @param {string} [req.body.usuario_id] - ID del usuario (requerido para 'firmado')
+ * @param {string} [req.body.password] - Contraseña (requerida para 'firmado')
+ * @returns {Object} Respuesta inmediata con éxito/error
+ *
+ * OPTIMIZACIONES:
+ * - Respuesta inmediata al frontend (no bloquea UI)
+ * - Procesamiento de paquete en background con setImmediate()
+ * - Una sola query para actualizar clasificación
+ * - Logging detallado para debugging
+ */
+app.put('/clasificaciones/id/:id/estado', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { estado } = req.body;
+
+    if (!estado) {
+      return res.status(400).json({ error: 'Estado es requerido' });
+    }
+
+    logger.debug(`🔄 Actualizando clasificación ${id} a estado '${estado}'`);
+
+    // ⚡ ACTUALIZACIÓN ULTRA RÁPIDA: Solo actualizar sin select
+    const { error } = await supabase
+      .from('clasificacion_herbario')
+      .update({ estado })
+      .eq('id', id);
+
+    if (error) {
+      logger.error('Error actualizando clasificación:', error);
+      return res.status(500).json({ error: 'Error actualizando clasificación', details: error.message });
+    }
+
+    // ✅ OBTENER ID_MUESTRA RÁPIDAMENTE (si es necesario para paquete)
+    const { data: clasificacion, error: errorBusqueda } = await supabase
+      .from('clasificacion_herbario')
+      .select('id_muestra')
+      .eq('id', id)
+      .single();
+
+    if (clasificacion && clasificacion.id_muestra) {
+      // ✅ ACTUALIZAR PAQUETE EN BACKGROUND (no bloquear respuesta)
+      actualizarEstadoPaqueteManual(clasificacion.id_muestra).catch(err => {
+        logger.warn('Error en actualización de paquete (background):', err.message);
+      });
+    }
+
+    // ⚡ RESPUESTA INMEDIATA
+    logger.debug(`✅ Clasificación ${id} actualizada a '${estado}'`);
+    res.json({
+      id,
+      estado,
+      message: 'Estado actualizado'
+    });
+
+  } catch (err) {
+    logger.error('Error en PUT /clasificaciones/id/:id/estado:', err);
+    res.status(500).json({ error: 'Error interno del servidor', details: err.message });
   }
 });
 
@@ -414,181 +974,45 @@ app.get('/taxonomia/especies/:generoId', async (req, res) => {
   }
 });
 
-app.get('/taxonomia/buscar', async (req, res) => {
-  try {
-    const { familia, genero, especie } = req.query;
-
-    if (!familia && !genero && !especie) {
-      return res.status(400).json({ error: 'Se requiere al menos un parámetro de búsqueda' });
-    }
-
-    let query = supabase
-      .from('especie')
-      .select(`
-        id, nombre, nombre_comun, tipo_amenaza,
-        genero!inner(id, nombre, familia!inner(id, nombre))
-      `);
-
-    if (familia) {
-      query = query.ilike('genero.familia.nombre', `%${familia}%`);
-    }
-    if (genero) {
-      query = query.ilike('genero.nombre', `%${genero}%`);
-    }
-    if (especie) {
-      query = query.ilike('nombre', `%${especie}%`);
-    }
-
-    const { data, error } = await query.limit(20);
-
-    if (error) {
-      console.error('Error en búsqueda taxonómica:', error);
-      return res.status(500).json({ error: 'Error en búsqueda taxonómica' });
-    }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /taxonomia/buscar:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-// ===== herbario =====
-app.get('/herbario', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('herbario')
-      .select('*')
-      .order('nombre');
-
-    if (error) {
-      console.error('Error obteniendo herbario:', error);
-      return res.status(500).json({ error: 'Error obteniendo herbario' });
-    }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /herbario:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 // ===== UBICACIONES GEOGRÁFICAS =====
 app.get('/ubicaciones/conglomerados', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('conglomerado')
-      .select(`
-        id, codigo, latitud_dec, longitud_dec,
-        municipio!inner(id, nombre, departamento!inner(id, nombre, region!inner(nombre)))
-      `)
-      .order('codigo');
+    // OBTENER CONGLOMERADOS COMPLETOS DESDE SERVICIO EXTERNO
+    // Ya incluyen municipio y departamento
+    const conglomerados = await externalApiClient.obtenerConglomerados({ limit: 2000 });
+    
+    // Formatear para mantener compatibilidad con frontend
+    const conglomeradosFormateados = conglomerados.map(c => ({
+      id: c.id,
+      codigo: c.codigo,
+      latitud_dec: c.latitud_dec,
+      longitud_dec: c.longitud_dec,
+      municipio: c.municipio || { 
+        id: c.id_municipio,
+        nombre: 'N/A', 
+        departamento: { nombre: 'N/A', region: { nombre: 'N/A' } } 
+      }
+    }));
 
-    if (error) {
-      console.error('Error obteniendo conglomerados:', error);
-      return res.status(500).json({ error: 'Error obteniendo conglomerados' });
-    }
-
-    res.json(data);
+    res.json(conglomeradosFormateados);
   } catch (err) {
     console.error('Error en GET /ubicaciones/conglomerados:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
+    // Fallback: intentar desde Supabase local si servicio externo falla
+    try {
+      const { data, error } = await supabase
+        .from('conglomerado')
+        .select(`
+          id, codigo, latitud_dec, longitud_dec,
+          municipio!inner(id, nombre, departamento!inner(id, nombre, region!inner(nombre)))
+        `)
+        .order('codigo');
 
-app.get('/ubicaciones/subparcelas/:conglomeradoId', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('subparcela')
-      .select('id, num_subparcela')
-      .eq('id_conglomerado', req.params.conglomeradoId)
-      .order('num_subparcela');
-
-    if (error) {
-      console.error('Error obteniendo subparcelas:', error);
-      return res.status(500).json({ error: 'Error obteniendo subparcelas' });
+      if (error) throw error;
+      res.json(data);
+    } catch (fallbackErr) {
+      console.error('Error en fallback:', fallbackErr);
+      res.status(500).json({ error: 'Error obteniendo conglomerados' });
     }
-
-    res.json(data);
-  } catch (err) {
-    console.error('Error en GET /ubicaciones/subparcelas/:conglomeradoId:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-// ===== ESTADÍSTICAS Y REPORTES =====
-app.get('/estadisticas/resumen', async (req, res) => {
-  try {
-    // Conteos generales
-    const [
-      { count: totalMuestras },
-      { count: muestrasPendientes },
-      { count: muestrasClasificadas },
-      { count: totalPaquetes }
-    ] = await Promise.all([
-      supabase.from('muestra_botanica').select('*', { count: 'exact', head: true }),
-      supabase.from('muestra_botanica').select('*', { count: 'exact', head: true }).in('estado_muestra', ['pendiente', 'en_proceso']),
-      supabase.from('muestra_botanica').select('*', { count: 'exact', head: true }).eq('estado_muestra', 'clasificada'),
-      supabase.from('paquete').select('*', { count: 'exact', head: true })
-    ]);
-
-    res.json({
-      totalMuestras,
-      muestrasPendientes,
-      muestrasClasificadas,
-      totalPaquetes,
-      porcentajeAvance: totalMuestras > 0 ? Math.round((muestrasClasificadas / totalMuestras) * 100) : 0
-    });
-
-  } catch (err) {
-    console.error('Error en GET /estadisticas/resumen:', err);
-    res.status(500).json({ error: 'Error obteniendo estadísticas' });
-  }
-});
-
-app.get('/estadisticas/por-ubicacion', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('muestra_botanica')
-      .select(`
-        estado_muestra,
-        paquete!inner(
-          evento_coleccion!inner(
-            conglomerado!inner(codigo, municipio!inner(nombre))
-          )
-        )
-      `);
-
-    if (error) {
-      console.error('Error obteniendo estadísticas por ubicación:', error);
-      return res.status(500).json({ error: 'Error obteniendo estadísticas' });
-    }
-
-    // Agrupar por ubicación
-    const estadisticas = {};
-    data.forEach(muestra => {
-      const ubicacion = muestra.paquete.evento_coleccion.conglomerado.codigo;
-      if (!estadisticas[ubicacion]) {
-        estadisticas[ubicacion] = {
-          codigo_postal: ubicacion,
-          municipio: muestra.paquete.evento_coleccion.conglomerado.municipio.nombre,
-          total: 0,
-          pendientes: 0,
-          clasificadas: 0
-        };
-      }
-      estadisticas[ubicacion].total++;
-      if (['pendiente', 'en_proceso'].includes(muestra.estado_muestra)) {
-        estadisticas[ubicacion].pendientes++;
-      } else if (muestra.estado_muestra === 'clasificada') {
-        estadisticas[ubicacion].clasificadas++;
-      }
-    });
-
-    res.json(Object.values(estadisticas));
-  } catch (err) {
-    console.error('Error en GET /estadisticas/por-ubicacion:', err);
-    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -706,7 +1130,7 @@ app.delete('/admin/herbario/:id', async (req, res) => {
 // Gestión de Usuarios de Herbario
 app.post('/admin/usuarios', async (req, res) => {
   try {
-    const { nombre, email, cedula, password, rol, id_herbario } = req.body;
+    const { nombre, email, cedula, telefono, password, rol, id_herbario } = req.body;
     
     if (!nombre || !email || !cedula || !rol || !id_herbario) {
       return res.status(400).json({ 
@@ -748,7 +1172,8 @@ app.post('/admin/usuarios', async (req, res) => {
         id_user: userId,
         nombre_completo: nombre,
         correo_electronico: email,
-        cedula,
+        cedula: cedula || null,
+        telefono: telefono || null,
         rol,
         id_herbario
       })
@@ -783,6 +1208,7 @@ app.get('/admin/usuarios', async (req, res) => {
   try {
     const { id_herbario } = req.query;
     
+    // 1. Obtener usuarios de info_usuario
     let query = supabase
       .from('info_usuario')
       .select(`
@@ -793,21 +1219,42 @@ app.get('/admin/usuarios', async (req, res) => {
           codigo_postal
         )
       `)
-      .order('id_user', { ascending: true });
+      .order('created_at', { ascending: false });
 
     if (id_herbario) {
       query = query.eq('id_herbario', id_herbario);
     }
 
-    const { data, error } = await query;
+    const { data: infoUsuarios, error } = await query;
 
     if (error) {
       console.error('Error obteniendo usuarios:', error);
       return res.status(500).json({ error: 'Error obteniendo usuarios' });
     }
 
-    // No retornar contraseñas
-    const users = data.map(({ password_hash, ...user }) => user);
+    // 2. Obtener usuarios de Auth para verificar cuáles existen
+    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+    
+    if (authError) {
+      console.warn('No se pudieron obtener usuarios de Auth:', authError);
+    }
+
+    // 3. Mapear usuarios con su info de Auth
+    const authUsersMap = new Map(
+      authUsers?.users?.map(u => [u.id, u]) || []
+    );
+
+    // 4. Enriquecer info_usuario con datos de Auth
+    const users = infoUsuarios.map(user => {
+      const authUser = authUsersMap.get(user.id_user);
+      return {
+        ...user,
+        email_verified: authUser?.email_confirmed_at ? true : false,
+        last_sign_in: authUser?.last_sign_in_at || null,
+        created_at_auth: authUser?.created_at || null
+      };
+    });
+
     res.json(users);
   } catch (err) {
     console.error('Error en GET /admin/usuarios:', err);
@@ -817,11 +1264,13 @@ app.get('/admin/usuarios', async (req, res) => {
 
 app.put('/admin/usuarios/:id', async (req, res) => {
   try {
-    const { nombre, email, rol, id_herbario } = req.body;
+    const { nombre, email, cedula, telefono, rol, id_herbario } = req.body;
 
     const updateData = {
       nombre_completo: nombre,
       correo_electronico: email,
+      cedula: cedula || null,
+      telefono: telefono || null,
       rol,
       id_herbario
     };
@@ -862,9 +1311,7 @@ app.put('/admin/usuarios/:id', async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // No retornar la contraseña
-    const { password_hash, ...userResponse } = data;
-    res.json(userResponse);
+    res.json(data);
   } catch (err) {
     console.error('Error en PUT /admin/usuarios:', err);
     res.status(500).json({ error: 'Error interno del servidor' });
@@ -1092,7 +1539,7 @@ app.post('/admin/departamentos', async (req, res) => {
       })
       .select(`
         *,
-        region:region_id (
+        region:id_region (
           id,
           nombre
         )
@@ -1116,18 +1563,18 @@ app.post('/admin/departamentos', async (req, res) => {
 
 app.put('/admin/departamentos/:id', async (req, res) => {
   try {
-    const { nombre, region_id } = req.body;
+    const { nombre, id_region } = req.body;
 
     const { data, error } = await supabase
       .from('departamento')
       .update({
         nombre,
-        region_id
+        id_region
       })
       .eq('id', req.params.id)
       .select(`
         *,
-        region:region_id (
+        region:id_region (
           id,
           nombre
         )
@@ -1270,21 +1717,21 @@ app.post('/admin/municipios', async (req, res) => {
 
 app.put('/admin/municipios/:id', async (req, res) => {
   try {
-    const { nombre, departamento_id } = req.body;
+    const { nombre, id_departamento } = req.body;
 
     const { data, error } = await supabase
       .from('municipio')
       .update({
         nombre,
-        departamento_id
+        id_departamento
       })
       .eq('id', req.params.id)
       .select(`
         *,
-        departamento:departamento_id (
+        departamento:id_departamento (
           id,
           nombre,
-          region:region_id (
+          region:id_region (
             id,
             nombre
           )
@@ -1394,16 +1841,9 @@ app.get('/admin/estadisticas', async (req, res) => {
       usuariosPorRol: roles
     });
   } catch (err) {
-    console.error('Error en GET /admin/estadisticas:', err);
+    logger.error('Error en GET /admin/estadisticas', { error: err.message });
     res.status(500).json({ error: 'Error interno del servidor' });
   }
-});
-
-const PORT = process.env.PORT || 3002;
-
-// Add error handling for unhandled promises
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Gest_Herb_service] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 // ===== RUTAS DE TAXONOMÍA JERÁRQUICA =====
@@ -1487,6 +1927,49 @@ app.get('/api/taxonomia/generos/:generoId/especies', async (req, res) => {
   }
 });
 
+// Crear nueva especie
+app.post('/api/taxonomia/especies', async (req, res) => {
+  try {
+    const { nombre, nombre_comun, tipo_amenaza, id_genero } = req.body;
+
+    // Validar campos requeridos
+    if (!nombre || !id_genero) {
+      return res.status(400).json({ error: 'Nombre e id_genero son obligatorios' });
+    }
+
+    // Nota: La validación de tipo_amenaza se hace a nivel de base de datos (ENUM)
+    // Los valores válidos según el ENUM son: CR, EN, VU, NN
+
+    const { data, error } = await supabase
+      .from('especie')
+      .insert({
+        nombre: nombre.trim(),
+        nombre_comun: nombre_comun ? nombre_comun.trim() : null,
+        tipo_amenaza: tipo_amenaza || null,
+        id_genero
+      })
+      .select('id, nombre, nombre_comun, tipo_amenaza')
+      .single();
+
+    if (error) {
+      logger.error('Error creando especie', { error: error.message, details: error });
+      // Detectar error de ENUM
+      if (error.message && error.message.includes('enum')) {
+        return res.status(400).json({ 
+          error: 'Tipo de amenaza no válido. Valores permitidos: CR, EN, VU, NN (o dejar vacío)'
+        });
+      }
+      return res.status(500).json({ error: 'Error creando especie', details: error.message });
+    }
+
+    logger.info('Nueva especie creada', { id: data.id, nombre: data.nombre });
+    res.status(201).json(data);
+  } catch (err) {
+    logger.error('Error en POST /api/taxonomia/especies', { error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor', details: err.message });
+  }
+});
+
 // Obtener información completa de una especie (con familia y género)
 app.get('/api/taxonomia/especies/:especieId/completa', async (req, res) => {
   try {
@@ -1499,10 +1982,10 @@ app.get('/api/taxonomia/especies/:especieId/completa', async (req, res) => {
         nombre,
         nombre_comun,
         tipo_amenaza,
-        genero:genero(
+        genero:id_genero(
           id,
           nombre,
-          familia:familia(
+          familia:id_familia(
             id,
             nombre
           )
@@ -1538,88 +2021,11 @@ app.get('/api/taxonomia/especies/:especieId/completa', async (req, res) => {
   }
 });
 
-// ===== TAXONOMÍA JERÁRQUICA =====
-app.get('/api/taxonomia/familias', async (req, res) => {
+// Alias para obtener especie completa
+app.get('/especies/:id', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('familia')
-      .select(`
-        id,
-        nombre,
-        generos:genero(count)
-      `)
-      .order('nombre');
+    const { id } = req.params;
 
-    if (error) throw error;
-
-    // Formatear los datos con el conteo de géneros
-    const familiasConConteo = data.map(familia => ({
-      id: familia.id,
-      nombre: familia.nombre,
-      generos_count: familia.generos[0]?.count || 0
-    }));
-
-    res.json(familiasConConteo);
-  } catch (error) {
-    console.error('Error obteniendo familias:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/api/taxonomia/familias/:familiaId/generos', async (req, res) => {
-  try {
-    const { familiaId } = req.params;
-    
-    const { data, error } = await supabase
-      .from('genero')
-      .select(`
-        id,
-        nombre,
-        especies:especie(count)
-      `)
-      .eq('id_familia', familiaId)
-      .order('nombre');
-
-    if (error) throw error;
-
-    // Formatear los datos con el conteo de especies
-    const generosConConteo = data.map(genero => ({
-      id: genero.id,
-      nombre: genero.nombre,
-      especies_count: genero.especies[0]?.count || 0
-    }));
-
-    res.json(generosConConteo);
-  } catch (error) {
-    console.error('Error obteniendo géneros:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-app.get('/api/taxonomia/generos/:generoId/especies', async (req, res) => {
-  try {
-    const { generoId } = req.params;
-    
-    const { data, error } = await supabase
-      .from('especie')
-      .select('id, nombre, nombre_comun, tipo_amenaza')
-      .eq('id_genero', generoId)
-      .order('nombre');
-
-    if (error) throw error;
-
-    res.json(data);
-  } catch (error) {
-    console.error('Error obteniendo especies:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-// Ruta para obtener información completa de una especie
-app.get('/api/taxonomia/especies/:especieId/completa', async (req, res) => {
-  try {
-    const { especieId } = req.params;
-    
     const { data, error } = await supabase
       .from('especie')
       .select(`
@@ -1627,57 +2033,40 @@ app.get('/api/taxonomia/especies/:especieId/completa', async (req, res) => {
         nombre,
         nombre_comun,
         tipo_amenaza,
-        genero:genero!inner(
+        genero:id_genero(
           id,
           nombre,
-          familia:familia!inner(
+          familia:id_familia(
             id,
             nombre
           )
         )
       `)
-      .eq('id', especieId)
+      .eq('id', id)
       .single();
 
     if (error) throw error;
 
-    // Formatear la respuesta con la jerarquía completa
-    const especieCompleta = {
-      especie: {
-        id: data.id,
-        nombre: data.nombre,
-        nombre_comun: data.nombre_comun,
-        tipo_amenaza: data.tipo_amenaza
-      },
-      genero: {
-        id: data.genero.id,
-        nombre: data.genero.nombre
-      },
-      familia: {
-        id: data.genero.familia.id,
-        nombre: data.genero.familia.nombre
-      }
-    };
-
-    res.json(especieCompleta);
+    res.json(data);
   } catch (error) {
-    console.error('Error obteniendo especie completa:', error);
+    logger.error('Error obteniendo especie', { error: error.message });
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
+const PORT = process.env.PORT || 3002;
+
 process.on('uncaughtException', (error) => {
-  console.error('[Gest_Herb_service] Uncaught Exception:', error);
+  logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
   process.exit(1);
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Gest_Herb_service] Servidor ejecutándose en puerto ${PORT}`);
-  console.log(`[Gest_Herb_service] Accesible en http://localhost:${PORT}`);
+  logger.info(`Servidor ejecutándose en puerto ${PORT}`, { url: `http://localhost:${PORT}` });
 });
 
 server.on('error', (error) => {
-  console.error('[Gest_Herb_service] Error del servidor:', error);
+  logger.error('Error del servidor', { error: error.message, code: error.code });
 });
 
 export default app;

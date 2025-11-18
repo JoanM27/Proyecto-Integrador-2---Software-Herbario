@@ -3,23 +3,49 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { requireAuth } from './middleware/auth.js';
 import { initJwtFromEnv } from '../../shared/crypto/jwt.js';
 import proxy from 'express-http-proxy';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+// Logger
+let logger;
+try {
+  const { createLogger } = await import('../../shared/logger/index.js');
+  logger = createLogger('Api_Gateway');
+  logger.info('Logger inicializado correctamente');
+} catch (error) {
+  console.warn('⚠️  Logger no disponible, usando console:', error.message);
+  logger = {
+    info: console.log,
+    warn: console.warn,
+    error: console.error,
+    debug: console.log,
+    middleware: (req, res, next) => next()
+  };
+}
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 app.use(helmet());
+app.use(logger.expressMiddleware());
 
 // Rate limiting básico
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use(limiter);
 
 // Healthcheck público
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/health', (req, res) => {
+  logger.debug('Health check solicitado');
+  res.json({ ok: true });
+});
 
 // Ejemplo de proxy/ruta protegida (placeholder)
 app.get('/secure/ping', requireAuth, (req, res) => {
@@ -45,7 +71,6 @@ function requireRole(role) {
 const LAB_URL = process.env.LAB_SERVICE_URL || 'http://localhost:3005';
 const RECEPCION_URL = process.env.RECEPCION_SERVICE_URL || 'http://localhost:3004';
 const GESTION_HERBARIO_URL = process.env.GESTION_HERBARIO_URL || 'http://localhost:3002';
-const TAB_CONTROL_URL = process.env.TAB_CONTROL_SERVICE_URL || 'http://localhost:3003';
 
 // ===== RUTAS DE LABORATORIO (solo laboratoristas) =====
 app.use('/laboratorio/muestras', requireAuth, requireRole('laboratorista'), proxy(LAB_URL, {
@@ -90,27 +115,6 @@ app.use('/herbario/ubicaciones', requireAuth, proxy(GESTION_HERBARIO_URL, {
   filter: (req) => req.method === 'GET' // Solo lectura
 }));
 
-// ===== RUTAS DE TABLERO DE CONTROL (acceso según rol) =====
-// Dashboard principal - ambos roles pueden ver
-app.use('/control/dashboard', requireAuth, proxy(TAB_CONTROL_URL, {
-  proxyReqPathResolver: (req) => `/dashboard${req.url}`
-}));
-
-// Reportes avanzados - solo laboratoristas (pueden analizar productividad)
-app.use('/control/reportes', requireAuth, requireRole('laboratorista'), proxy(TAB_CONTROL_URL, {
-  proxyReqPathResolver: (req) => `/reportes${req.url}`
-}));
-
-// Alertas - ambos roles pueden ver
-app.use('/control/alertas', requireAuth, proxy(TAB_CONTROL_URL, {
-  proxyReqPathResolver: (req) => `/alertas${req.url}`
-}));
-
-// Análisis geográfico - ambos roles pueden ver  
-app.use('/control/analisis-geografico', requireAuth, proxy(TAB_CONTROL_URL, {
-  proxyReqPathResolver: (req) => `/analisis-geografico${req.url}`
-}));
-
 // ===== RUTAS DE CONSULTA PÚBLICA (sin autenticación) =====
 // Estadísticas generales para público
 app.use('/publico/estadisticas', proxy(GESTION_HERBARIO_URL, {
@@ -130,8 +134,7 @@ app.get('/health/all', async (req, res) => {
     const servicios = [
       { nombre: 'Lab_Service', url: LAB_URL },
       { nombre: 'Recepcion_Service', url: RECEPCION_URL },
-      { nombre: 'Gestion_Herbario', url: GESTION_HERBARIO_URL },
-      { nombre: 'Tab_Control_Service', url: TAB_CONTROL_URL }
+      { nombre: 'Gestion_Herbario', url: GESTION_HERBARIO_URL }
     ];
 
     const estadoServicios = await Promise.allSettled(
@@ -166,6 +169,12 @@ app.get('/health/all', async (req, res) => {
 
     const todosActivos = resultados.every(r => r.estado === 'activo');
 
+    logger.info('Health check de todos los servicios', { 
+      todosActivos, 
+      serviciosActivos: resultados.filter(r => r.estado === 'activo').length,
+      serviciosTotal: resultados.length
+    });
+
     res.status(todosActivos ? 200 : 503).json({
       estado_general: todosActivos ? 'saludable' : 'degradado',
       servicios: resultados,
@@ -173,6 +182,7 @@ app.get('/health/all', async (req, res) => {
     });
 
   } catch (error) {
+    logger.error('Error verificando estado de servicios', { error: error.message });
     res.status(500).json({ 
       error: 'Error verificando estado de servicios',
       detalles: error.message 
@@ -186,12 +196,12 @@ const port = process.env.PORT || 3000;
 async function startServer() {
   try {
     await initJwtFromEnv();
-    console.log('[Api_Gateway] JWT initialized');
+    logger.info('JWT inicializado correctamente');
     app.listen(port, () => {
-      console.log(`[Api_Gateway] listening on port ${port}`);
+      logger.info(`API Gateway ejecutándose en puerto ${port}`, { url: `http://localhost:${port}` });
     });
   } catch (error) {
-    console.error('[Api_Gateway] Error initializing JWT:', error);
+    logger.error('Error inicializando JWT', { error: error.message, stack: error.stack });
     process.exit(1);
   }
 }

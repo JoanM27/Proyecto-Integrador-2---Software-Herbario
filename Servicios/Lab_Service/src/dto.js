@@ -10,27 +10,8 @@ export function validateClasificacionDTO(data) {
     errors.push('id_muestra es requerido y debe ser un número');
   }
 
-  if (!data.familia_final || typeof data.familia_final !== 'string' || data.familia_final.trim().length === 0) {
-    errors.push('familia_final es requerida');
-  }
-
-  if (!data.genero_final || typeof data.genero_final !== 'string' || data.genero_final.trim().length === 0) {
-    errors.push('genero_final es requerido');
-  }
-
-  if (!data.especie_final || typeof data.especie_final !== 'string' || data.especie_final.trim().length === 0) {
-    errors.push('especie_final es requerida');
-  }
-
-  // Validar nombre científico completo
-  if (data.nombre_cientifico_final && typeof data.nombre_cientifico_final !== 'string') {
-    errors.push('nombre_cientifico_final debe ser un string');
-  }
-
-  // Validar estado de amenaza
-  const tiposAmenaza = ['CR', 'EN', 'VU', 'NN'];
-  if (data.tipo_amenaza && !tiposAmenaza.includes(data.tipo_amenaza)) {
-    errors.push('tipo_amenaza debe ser uno de: CR, EN, VU, NN');
+  if (!data.id_especie || typeof data.id_especie !== 'number') {
+    errors.push('id_especie es requerido y debe ser un número');
   }
 
   // Validar estado reproductivo
@@ -45,9 +26,9 @@ export function validateClasificacionDTO(data) {
     errors.push(`estado_reproductivo debe ser uno de: ${estadosReproductivos.join(', ')}`);
   }
 
-  // Validar ID usuario clasificador
-  if (!data.id_usuario_clasificador || typeof data.id_usuario_clasificador !== 'number') {
-    errors.push('id_usuario_clasificador es requerido y debe ser un número');
+  // Validar ID determinador (usuario que clasifica)
+  if (!data.id_determinador || typeof data.id_determinador !== 'string') {
+    errors.push('id_determinador es requerido y debe ser un UUID (string)');
   }
 
   return {
@@ -57,20 +38,41 @@ export function validateClasificacionDTO(data) {
 }
 
 // Crear objeto para inserción en clasificacion_herbario
-export function createClasificacionInsert(data, userId) {
+export async function createClasificacionInsert(data, fotoFile = null) {
+  let idFoto = null;
+
+  // Si hay foto, crear registro en tabla archivos
+  if (fotoFile) {
+    const { bucketId, path, name, mime, size, userId } = fotoFile;
+    
+    const { data: archivoData, error: archivoError } = await supabase
+      .from('archivos')
+      .insert({
+        bucket_id: bucketId,
+        path: path,
+        name: name,
+        mime: mime,
+        size: size,
+        user_id: userId
+      })
+      .select('id')
+      .single();
+
+    if (archivoError) {
+      console.error('Error creando registro de archivo:', archivoError);
+      throw new Error('No se pudo registrar el archivo de la foto');
+    }
+
+    idFoto = archivoData.id;
+  }
+
   const clasificacion = {
-    id_muestra_botanica: data.id_muestra,
-    familia_final: data.familia_final.trim(),
-    genero_final: data.genero_final.trim(),
-    especie_final: data.especie_final.trim(),
-    nombre_cientifico_final: data.nombre_cientifico_final?.trim() || 
-      `${data.genero_final.trim()} ${data.especie_final.trim()}`,
-    tipo_amenaza: data.tipo_amenaza || 'NN',
-    estado_reproductivo: data.estado_reproductivo || 'Vegetativo',
-    observaciones_clasificacion: data.observaciones_clasificacion?.trim() || '',
-    id_usuario_clasificador: userId,
-    fecha_clasificacion: new Date().toISOString(),
-    estado_clasificacion: 'Clasificada'
+    id_muestra: data.id_muestra,
+    id_especie: data.id_especie,
+    id_foto: idFoto,
+    id_determinador: data.id_determinador,
+    estado: 'clasificado', // CORREGIDO: estado_clasificacion enum es 'clasificado' no 'clasificada'
+    estado_reproductivo: data.estado_reproductivo || null
   };
 
   return clasificacion;

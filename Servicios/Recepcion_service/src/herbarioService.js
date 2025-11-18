@@ -75,4 +75,15 @@ export class HerbarioService {
       return { success: false, error: error.response?.data?.error || 'Error obteniendo subparcelas' };
     }
   }
+
+  // Sincronizar conglomerado desde servicio externo
+  static async sincronizarConglomerado(idConglomerado) {
+    try {
+      const response = await axios.post(`${GESTION_HERBARIO_URL}/conglomerados/sincronizar/${idConglomerado}`);
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Error sincronizando conglomerado:', error.response?.data || error.message);
+      return { success: false, error: error.response?.data?.error || 'Error sincronizando conglomerado' };
+    }
+  }
 }

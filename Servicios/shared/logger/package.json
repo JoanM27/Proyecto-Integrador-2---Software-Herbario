@@ -1,0 +1,13 @@
+{
+  "name": "@herbario/logger",
+  "version": "1.0.0",
+  "description": "Sistema de logging centralizado para microservicios del Herbario Digital",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "keywords": ["logger", "logging", "microservices"],
+  "author": "Herbario Digital Team",
+  "license": "MIT"
+}

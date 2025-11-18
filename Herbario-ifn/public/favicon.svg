@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2e7d32;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4caf50;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <g>
+    <!-- Hoja principal -->
+    <path d="M16 3C20 5 24 9 26 13C28 17 28 21 26 25C24 29 20 31 16 32C12 31 8 29 6 25C4 21 4 17 6 13C8 9 12 5 16 3Z" fill="url(#grad)"/>
+    
+    <!-- Hoja interior -->
+    <path d="M16 7C18 8 20 10 21 12C22 14 22 16 21 18C20 20 18 22 16 23C14 22 12 20 11 18C10 16 10 14 11 12C12 10 14 8 16 7Z" fill="#1e5922"/>
+    
+    <!-- Texto TAX -->
+    <text x="16" y="28" text-anchor="middle" fill="#1e5922" font-family="Arial, sans-serif" font-size="6" font-weight="bold">TAX</text>
+  </g>
+</svg>

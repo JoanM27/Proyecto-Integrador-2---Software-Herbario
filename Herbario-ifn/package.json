@@ -1,0 +1,22 @@
+{
+  "name": "herbario-digital-tax-ifn",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sistema de Herbario Digital para Tax-IFN - Inventario Forestal Nacional",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.22",
+    "vue-router": "^4.0.13",
+    "axios": "^1.6.0",
+    "@supabase/supabase-js": "^2.39.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.1.7"
+  }
+}

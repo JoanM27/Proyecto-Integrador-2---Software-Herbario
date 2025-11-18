@@ -3,23 +3,306 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-import { validatePaqueteDTO, createPaqueteInsert } from './dto.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { validatePaqueteDTO, createPaqueteInsert, validateActualizarEstadoDTO, createActualizarEstadoUpdate } from './dto.js';
 import { HerbarioService } from './herbarioService.js';
+import { externalApiClient } from './externalApiClient.js';
+import { supabase } from './supabase.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+// Logger
+let logger;
+try {
+  const { createLogger } = await import('../../shared/logger/index.js');
+  logger = createLogger('Recepcion_service');
+  logger.info('Logger inicializado correctamente');
+} catch (error) {
+  console.warn('⚠️  Logger no disponible, usando console:', error.message);
+  logger = {
+    info: console.log,
+    warn: console.warn,
+    error: console.error,
+    debug: console.log,
+    middleware: (req, res, next) => next()
+  };
+}
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ charset: 'utf-8' }));
+app.use(express.urlencoded({ extended: true, charset: 'utf-8' }));
 app.use(cors());
 app.use(helmet());
+
+// Configurar charset UTF-8 para todas las respuestas
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
+
+app.use(logger.expressMiddleware());
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use(limiter);
 
 // Health
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/health', (req, res) => {
+  logger.debug('Health check solicitado');
+  res.json({ ok: true });
+});
+
+// ==================== NUEVOS ENDPOINTS PARA INTEGRACIÓN CON SERVICIO EXTERNO ====================
+
+/**
+ * GET /paquetes/buscar/:numeroPaquete
+ * Busca un paquete en el servicio externo por número de paquete
+ * @param {string} numeroPaquete - Número del paquete a buscar
+ * @returns {Object} Información del paquete encontrado o mensaje de no encontrado
+ */
+app.get('/paquetes/buscar/:numeroPaquete', async (req, res) => {
+  try {
+    const { numeroPaquete } = req.params;
+    
+    if (!numeroPaquete) {
+      return res.status(400).json({ error: 'Número de paquete requerido' });
+    }
+
+    logger.info(`Buscando paquete ${numeroPaquete} - Verificando primero en BD local`);
+
+    // 1. PRIMERO: Verificar si el paquete ya existe en la base de datos local
+    const { data: paqueteExistente, error: errorBusqueda } = await supabase
+      .from('paquete')
+      .select('id, num_paquete, estado, fecha_recibido_herbario, observaciones_generales, cantidad_ejemplares, id_conglomerado')
+      .eq('num_paquete', String(numeroPaquete))
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (errorBusqueda) {
+      logger.error('Error verificando paquete en BD local', { error: errorBusqueda.message });
+    }
+
+    // Si el paquete YA EXISTE en la BD local, informar y NO buscar en servicio externo
+    if (paqueteExistente) {
+      logger.info(`Paquete ${numeroPaquete} encontrado en BD local con estado: ${paqueteExistente.estado}`);
+      return res.json({
+        encontrado: true,
+        yaRecibido: true,
+        mensaje: `Este paquete ya fue recibido el ${paqueteExistente.fecha_recibido_herbario}. No se puede procesar nuevamente.`,
+        paquete: paqueteExistente
+      });
+    }
+
+    // 2. SOLO SI NO EXISTE EN BD LOCAL: Buscar en servicio externo
+    logger.info(`Paquete ${numeroPaquete} NO encontrado en BD local, buscando en servicio externo`);
+    
+    const conectado = await externalApiClient.verificarConexion();
+    if (!conectado) {
+      return res.status(503).json({ 
+        error: 'Servicio externo no disponible',
+        detalles: 'No se puede conectar con el servicio de datos de campo'
+      });
+    }
+
+    // Obtener datos completos del paquete desde servicio externo
+    const resultado = await externalApiClient.obtenerDatosCompletosParaRecepcion(parseInt(numeroPaquete));
+    
+    if (!resultado.encontrado) {
+      return res.status(404).json({ 
+        encontrado: false,
+        mensaje: 'Paquete no encontrado en el servicio externo',
+        sugerencia: 'Puede registrar los datos manualmente'
+      });
+    }
+
+    // Devolver datos encontrados
+    res.json({
+      encontrado: true,
+      yaRecibido: false,
+      mensaje: resultado.mensaje,
+      datos: resultado.datos
+    });
+
+  } catch (error) {
+    logger.error('Error buscando paquete en servicio externo', { error: error.message });
+    res.status(500).json({ 
+      error: 'Error al buscar paquete',
+      detalles: error.message 
+    });
+  }
+});
+
+/**
+ * PUT /paquetes/confirmar-recepcion
+ * Confirma la recepción de un paquete encontrado en el servicio externo
+ * @param {Object} req.body - Datos para confirmar recepción
+ * @param {string} req.body.num_paquete - Número del paquete
+ * @param {string} [req.body.observaciones_recepcion] - Observaciones de recepción
+ * @param {number} req.body.id_conglomerado - ID del conglomerado
+ * @param {Array} req.body.muestras - Datos de las muestras
+ * @returns {Object} Confirmación de recepción exitosa
+ */
+app.put('/paquetes/confirmar-recepcion', async (req, res) => {
+  try {
+    const {
+      num_paquete,
+      observaciones_recepcion,
+      id_conglomerado,
+      muestras // Datos ya obtenidos del servicio externo
+    } = req.body;
+
+    if (!num_paquete || !id_conglomerado || !muestras) {
+      return res.status(400).json({ error: 'Datos incompletos para confirmar recepción' });
+    }
+
+    logger.info(`Confirmando recepción de paquete ${num_paquete}`);
+
+    // VERIFICAR SI EL PAQUETE YA EXISTE ANTES DE CREARLO
+    const { data: paqueteExistente, error: errorVerificacion } = await supabase
+      .from('paquete')
+      .select('id, num_paquete, estado, fecha_recibido_herbario')
+      .eq('num_paquete', String(num_paquete))
+      .maybeSingle();
+
+    if (errorVerificacion) {
+      logger.error('Error verificando paquete existente', { error: errorVerificacion.message });
+      return res.status(500).json({ error: 'Error verificando paquete', detalle: errorVerificacion.message });
+    }
+
+    if (paqueteExistente) {
+      logger.warn(`Paquete ${num_paquete} ya existe con ID ${paqueteExistente.id}`);
+      return res.status(409).json({ 
+        error: 'Paquete duplicado', 
+        mensaje: `El paquete ${num_paquete} ya fue recibido el ${paqueteExistente.fecha_recibido_herbario}`,
+        paquete_id: paqueteExistente.id
+      });
+    }
+
+    // Preparar datos para inserción
+    const paqueteData = {
+      id_conglomerado,
+      num_paquete,
+      cantidad_ejemplares: muestras.length,
+      fecha_envio: req.body.fecha_envio || null,
+      fecha_recibido_herbario: new Date().toISOString().split('T')[0], // HOY
+      observaciones_generales: observaciones_recepcion || null,
+      estado: 'recibido', // ESTADO CONFIRMADO
+      muestras: muestras
+    };
+
+    // Validar datos
+    const validation = validatePaqueteDTO(paqueteData);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: 'Datos inválidos', details: validation.errors });
+    }
+
+    // Crear paquete y muestras
+    const { paquete, muestras: muestrasProcessed } = createPaqueteInsert(paqueteData);
+    
+    // Sincronizar conglomerado antes de crear el paquete
+    // Si el conglomerado no existe en nuestra BD, lo obtiene del servicio externo y lo crea
+    logger.info(`Verificando/sincronizando conglomerado ${id_conglomerado}`);
+    const syncResult = await HerbarioService.sincronizarConglomerado(id_conglomerado);
+    if (!syncResult.success) {
+      logger.error('Error sincronizando conglomerado', { error: syncResult.error });
+      return res.status(500).json({ 
+        error: 'Error sincronizando conglomerado', 
+        detalle: syncResult.error 
+      });
+    }
+
+    // ===== CÓDIGO ORIGINAL (ANTES DE TRIGGERS) =====
+    // const paqueteResult = await HerbarioService.crearPaquete(paquete);
+    // if (!paqueteResult.success) {
+    //   return res.status(500).json({ error: paqueteResult.error });
+    // }
+    // 
+    // const muestrasConPaquete = muestrasProcessed.map(muestra => ({
+    //   ...muestra,
+    //   id_paquete: paqueteResult.data.id
+    // }));
+    // 
+    // const muestrasResult = await HerbarioService.crearMuestras(muestrasConPaquete);
+    // if (!muestrasResult.success) {
+    //   return res.status(500).json({ error: muestrasResult.error });
+    // }
+    // ===== FIN CÓDIGO ORIGINAL =====
+
+    // CREAR PAQUETE Y MUESTRAS CON FUNCIÓN RPC (atomicidad garantizada)
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('crear_paquete_con_muestras', {
+      p_paquete: {
+        num_paquete: paquete.num_paquete,
+        id_conglomerado: paquete.id_conglomerado,
+        cantidad_ejemplares: muestrasProcessed.length,
+        fecha_envio: paquete.fecha_envio || null,
+        fecha_recibido_herbario: new Date().toISOString().split('T')[0],
+        observaciones_generales: paquete.observaciones_generales || null,
+        estado: 'recibido'
+      },
+      p_muestras: muestrasProcessed.map(m => ({
+        num_individuo: m.num_individuo || null,
+        colector: m.colector || null,
+        num_coleccion: m.num_coleccion || null,
+        observaciones: m.observaciones || null,
+        fecha_coleccion: m.fecha_coleccion || null,
+        id_subparcelas: m.id_subparcelas || null
+      }))
+    });
+
+    if (rpcError) {
+      logger.error('Error en RPC crear_paquete_con_muestras', { error: rpcError });
+      return res.status(500).json({ 
+        error: 'Error creando paquete y muestras',
+        detalle: rpcError.message 
+      });
+    }
+
+    if (!rpcResult?.ok) {
+      logger.warn('RPC retornó error', { resultado: rpcResult });
+      if (rpcResult?.error === 'paquete_duplicado') {
+        return res.status(409).json({ 
+          error: 'Paquete duplicado', 
+          mensaje: rpcResult.mensaje 
+        });
+      }
+      return res.status(500).json({ error: rpcResult?.error || 'Error desconocido' });
+    }
+
+    logger.info(`Paquete creado con ID ${rpcResult.paquete_id}, ${rpcResult.total_muestras} muestras`);
+    const paqueteResult = { success: true, data: { id: rpcResult.paquete_id } };
+
+    res.status(201).json({
+      ok: true,
+      mensaje: 'Recepción confirmada exitosamente',
+      paquete_id: paqueteResult.data.id,
+      muestras_creadas: muestrasProcessed.length,
+      estado: 'recibido',
+      fecha_recepcion: new Date().toISOString()
+    });
+
+  } catch (error) {
+    logger.error('Error confirmando recepción', { error: error.message, stack: error.stack });
+    console.error('Error completo:', error);
+    res.status(500).json({ error: 'Error al confirmar recepción', detalle: error.message });
+  }
+});
 
 // Registrar paquete con muestras (lógica de negocio + delegación a Gestión Herbario)
+// ACTUALIZADO SCHEMA V3.0: Sin evento_colección, relación directa con conglomerado
+
+/**
+ * POST /paquetes
+ * Registra un nuevo paquete con sus muestras en el sistema
+ * @param {Object} req.body - Datos del paquete y muestras
+ * @param {number} req.body.id_conglomerado - ID del conglomerado
+ * @param {Array} req.body.muestras - Array de muestras del paquete
+ * @param {string} [req.body.observaciones_generales] - Observaciones del paquete
+ * @returns {Object} Información del paquete creado
+ */
 app.post('/paquetes', async (req, res) => {
   try {
     // 1. VALIDACIÓN DE DATOS (Lógica de Negocio)
@@ -29,7 +312,29 @@ app.post('/paquetes', async (req, res) => {
     }
 
     // 2. TRANSFORMACIÓN DE DATOS (Lógica de Negocio)
-    const { evento, paquete, muestras } = createPaqueteInsert(req.body);
+    const { paquete, muestras } = createPaqueteInsert(req.body);
+
+    // 2.1 VERIFICAR SI EL PAQUETE YA EXISTE
+    logger.info(`Verificando si paquete ${paquete.num_paquete} ya existe`);
+    const { data: paqueteExistente, error: errorVerificacion } = await supabase
+      .from('paquete')
+      .select('id, num_paquete, estado, fecha_recibido_herbario')
+      .eq('num_paquete', String(paquete.num_paquete))
+      .maybeSingle();
+
+    if (errorVerificacion) {
+      logger.error('Error verificando paquete existente', { error: errorVerificacion.message });
+      return res.status(500).json({ error: 'Error verificando paquete', detalle: errorVerificacion.message });
+    }
+
+    if (paqueteExistente) {
+      logger.warn(`Paquete ${paquete.num_paquete} ya existe con ID ${paqueteExistente.id}`);
+      return res.status(409).json({ 
+        error: 'Paquete duplicado', 
+        mensaje: `El paquete ${paquete.num_paquete} ya fue recibido el ${paqueteExistente.fecha_recibido_herbario}`,
+        paquete_id: paqueteExistente.id
+      });
+    }
 
     // 3. VALIDACIONES ADICIONALES DE NEGOCIO
     if (muestras.length === 0) {
@@ -42,37 +347,68 @@ app.post('/paquetes', async (req, res) => {
 
     // 4. CÁLCULOS DERIVADOS (Lógica de Negocio)
     paquete.cantidad_ejemplares = muestras.length;
-    paquete.fecha_recibido_herbario = new Date().toISOString();
+    paquete.fecha_recibido_herbario = paquete.fecha_recibido_herbario || new Date().toISOString().split('T')[0];
 
-    // 6. DELEGACIÓN A GESTIÓN HERBARIO: evento -> paquete -> muestras
-    const eventoResult = await HerbarioService.crearEvento(evento);
-    if (!eventoResult.success) {
-      return res.status(500).json({ error: eventoResult.error });
+    // 5. SINCRONIZACIÓN DEL CONGLOMERADO
+    // Asegurar que el conglomerado existe antes de crear el paquete
+    logger.info(`Verificando/sincronizando conglomerado ${paquete.id_conglomerado}`);
+    const syncResult = await HerbarioService.sincronizarConglomerado(paquete.id_conglomerado);
+    if (!syncResult.success) {
+      logger.error(`Error sincronizando conglomerado ${paquete.id_conglomerado}`, { error: syncResult.error });
+      return res.status(500).json({ error: 'Error sincronizando conglomerado: ' + syncResult.error });
+    }
+    logger.info(`Conglomerado ${paquete.id_conglomerado} verificado/sincronizado correctamente`);
+
+    // 6-7. CREAR PAQUETE Y MUESTRAS EN UNA SOLA TRANSACCIÓN (RPC)
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('crear_paquete_con_muestras', {
+      p_paquete: {
+        num_paquete: paquete.num_paquete,
+        id_conglomerado: paquete.id_conglomerado,
+        cantidad_ejemplares: paquete.cantidad_ejemplares,
+        fecha_envio: paquete.fecha_envio || null,
+        fecha_recibido_herbario: paquete.fecha_recibido_herbario,
+        observaciones_generales: paquete.observaciones_generales || null,
+        estado: paquete.estado || 'recibido'
+      },
+      p_muestras: muestras.map(m => ({
+        num_individuo: m.num_individuo || null,
+        colector: m.colector || null,
+        num_coleccion: m.num_coleccion || null,
+        observaciones: m.observaciones || null,
+        fecha_coleccion: m.fecha_coleccion || null,
+        id_subparcelas: m.id_subparcelas || null
+      }))
+    });
+
+    if (rpcError) {
+      logger.error('Error en RPC crear_paquete_con_muestras', { error: rpcError });
+      return res.status(500).json({ 
+        error: 'Error creando paquete y muestras',
+        detalle: rpcError.message 
+      });
     }
 
-    paquete.id_evento_coleccion = eventoResult.data.id;
-    const paqueteResult = await HerbarioService.crearPaquete(paquete);
-    if (!paqueteResult.success) {
-      return res.status(500).json({ error: paqueteResult.error });
+    if (!rpcResult?.ok) {
+      logger.warn('RPC retornó error', { resultado: rpcResult });
+      if (rpcResult?.error === 'paquete_duplicado') {
+        return res.status(409).json({ 
+          error: 'Paquete duplicado', 
+          mensaje: rpcResult.mensaje 
+        });
+      }
+      return res.status(500).json({ error: rpcResult?.error || 'Error desconocido' });
     }
 
-    const muestrasConPaquete = muestras.map(muestra => ({
-      ...muestra,
-      id_paquete: paqueteResult.data.id
-    }));
+    logger.info(`Paquete creado con ID ${rpcResult.paquete_id}, ${rpcResult.total_muestras} muestras`);
+    const paqueteResult = { success: true, data: { id: rpcResult.paquete_id } };
 
-    const muestrasResult = await HerbarioService.crearMuestras(muestrasConPaquete);
-    if (!muestrasResult.success) {
-      return res.status(500).json({ error: muestrasResult.error });
-    }
-
-    // 7. RESPUESTA CON DATOS PROCESADOS (Lógica de Negocio)
+    // 8. RESPUESTA CON DATOS PROCESADOS (Lógica de Negocio)
     res.status(201).json({
       ok: true,
-      mensaje: 'Paquete registrado exitosamente',
-      evento_id: eventoResult.data.id,
+      mensaje: 'Paquete recibido exitosamente',
       paquete_id: paqueteResult.data.id,
       muestras_creadas: muestras.length,
+      estado: paquete.estado || 'recibido',
       fecha_procesamiento: new Date().toISOString()
     });
   } catch (e) {
@@ -177,12 +513,12 @@ app.get('/conglomerados/:id/subparcelas', async (req, res) => {
 
     res.json(result.data);
   } catch (e) {
-    console.error('Error en GET /conglomerados/:id/subparcelas:', e);
+    logger.error('Error en GET /conglomerados/:id/subparcelas', { error: e.message });
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 const port = process.env.PORT || 3004;
 app.listen(port, () => {
-  console.log(`[Recepcion_Service] listening on port ${port}`);
+  logger.info(`Servidor ejecutándose en puerto ${port}`, { url: `http://localhost:${port}` });
 });
