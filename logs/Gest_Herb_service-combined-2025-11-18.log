@@ -1,0 +1,6 @@
+{"timestamp":"2025-11-18T14:31:27.114Z","level":"info","service":"Gest_Herb_service","message":"Logger inicializado correctamente","pid":54444}
+{"timestamp":"2025-11-18T14:31:27.116Z","level":"info","service":"Gest_Herb_service","message":"Probando conexión a Supabase...","url":"https://shofnxgzwqhvdznznfwp.supabase.co","hasKey":true,"pid":54444}
+{"timestamp":"2025-11-18T14:31:27.190Z","level":"info","service":"Gest_Herb_service","message":"Servidor ejecutándose en puerto 3002","url":"http://localhost:3002","pid":54444}
+{"timestamp":"2025-11-18T14:31:28.246Z","level":"info","service":"Gest_Herb_service","message":"GET /health","method":"GET","path":"/health","ip":"127.0.0.1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":54444}
+{"timestamp":"2025-11-18T14:31:28.251Z","level":"info","service":"Gest_Herb_service","message":"GET /health 200","method":"GET","path":"/health","statusCode":200,"duration":"5ms","pid":54444}
+{"timestamp":"2025-11-18T14:31:28.938Z","level":"info","service":"Gest_Herb_service","message":"✅ Conexión a Supabase exitosa","datosCount":1,"pid":54444}
