@@ -1,13 +1,15 @@
 param(
   [switch]$Install,                 # Fuerza npm install incluso si node_modules existe
-  [switch]$NoWindows,               # Si se especifica, inicia en la misma ventana como jobs
-  [int]$HealthTimeoutSec = 30       # Timeout por servicio para health check
+  [switch]$Windows,                 # Si se especifica, abre ventanas separadas para cada servicio
+  [int]$HealthTimeoutSec = 45       # Timeout por servicio para health check (aumentado para Vite)
 )
 
 # Este script automáticamente detecta y instala dependencias npm faltantes:
 # - Verifica si existe node_modules en cada servicio
 # - Instala dependencias automáticamente si faltan o están corruptas
 # - Solo usa -Install para forzar reinstalación completa
+# - Por defecto ejecuta servicios como jobs en background
+# - Usa -Windows para abrir ventanas separadas de PowerShell
 
 # Utilidades visuales
 function Write-Info($msg){ Write-Host $msg -ForegroundColor Cyan }
@@ -28,17 +30,14 @@ $services = @(
   @{ Name = 'Api_Gateway';          Path = (Join-Path $Root 'Servicios/Api_Gateway');          Port = 3000; Health = '/health'; Start = 'node src/app.js' },
   
   # Servicios de NEGOCIO (Primera Entrega - Casos de Uso Prioritarios)
-  @{ Name = 'Recepcion_service';    Path = (Join-Path $Root 'Servicios/Recepcion_service');    Port = 3004; Health = '/health'; Start = 'node src/app.js' },
-  @{ Name = 'Lab_Service';          Path = (Join-Path $Root 'Servicios/Lab_Service');          Port = 3005; Health = '/health'; Start = 'node src/app.js' },
+  @{ Name = 'Recepcion_service';    Path = (Join-Path $Root 'Servicios/Recepcion_service');    Port = 3004; Health = '/health'; Start = 'npm start' },
+  @{ Name = 'Lab_Service';          Path = (Join-Path $Root 'Servicios/Lab_Service');          Port = 3005; Health = '/health'; Start = 'npm start' },
+  
+  # Servicio EXTERNO (Datos de Campo IFN - Conglomerados)
+  @{ Name = 'Servicio_Externo_API'; Path = (Join-Path $Root 'Servicio_Externo_API');           Port = 4000; Health = '/health'; Start = 'npm start' },
   
   # Interfaces FRONTEND (Primera Entrega)
-  @{ Name = 'Admin_App';            Path = (Join-Path $Root 'Frontend/Admin_App');             Port = 5173; Health = '/'; Start = 'npm run dev' },
-  @{ Name = 'Herbario_IFN';         Path = (Join-Path $Root 'Frontend/Herbario-ifn');          Port = 5176; Health = '/'; Start = 'npm run dev' }
-  
-  # NOTA: Para segunda entrega se agregarán:
-  # - Tab_Control_Service (Tablero de control/estadísticas)
-  # - Cord_Datos_Service (Coordinación de datos)
-  # - Serv_Externos_Service (Servicios externos)
+  @{ Name = 'Herbario_IFN';         Path = (Join-Path $Root 'Frontend/Herbario-ifn');          Port = 5173; Health = '/'; Start = 'npm run dev' }
 )
 
 function Test-NeedsInstall($svcPath){
@@ -100,31 +99,42 @@ function Install-ServiceDeps($svc){
 function Start-ServiceProcess($svc){
   $path = $svc.Path
   $cmd = $svc.Start
-  if ($NoWindows) {
+  if ($Windows) {
+    Write-Info "[${($svc.Name)}] Iniciando (ventana nueva)..."
+    $escapedPath = $path -replace '"', '""'
+    $commandLine = "Set-Location `"$escapedPath`"; $cmd"
+    Start-Process -FilePath "powershell.exe" -ArgumentList @('-NoExit','-Command', $commandLine) -WindowStyle Normal | Out-Null
+  } else {
     Write-Info "[${($svc.Name)}] Iniciando (Job)..."
     $script = {
       param($p,$c)
-      Set-Location $p
+      Set-Location "$p"
       & powershell -NoProfile -Command $c
     }
     Start-Job -Name $svc.Name -ScriptBlock $script -ArgumentList @($path, $cmd) | Out-Null
-  } else {
-    Write-Info "[${($svc.Name)}] Iniciando (ventana nueva)..."
-    $commandLine = "Set-Location `"$path`"; $cmd"
-    Start-Process -FilePath "powershell.exe" -ArgumentList @('-NoExit','-Command', $commandLine) -WindowStyle Normal | Out-Null
   }
 }
 
 function Wait-Healthy($svc){
   $url = "http://localhost:$($svc.Port)$($svc.Health)"
   $deadline = (Get-Date).AddSeconds($HealthTimeoutSec)
+  $attempts = 0
   do {
+    $attempts++
     try {
-      $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
-      if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) { Write-Ok "[${($svc.Name)}] UP: $url"; return $true }
-    } catch { Start-Sleep -Milliseconds 800 }
+      $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+      if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) { 
+        Write-Ok "[${($svc.Name)}] UP en $attempts intentos: $url"
+        return $true 
+      }
+    } catch { 
+      if ($attempts % 5 -eq 0) {
+        Write-Info "[${($svc.Name)}] Esperando respuesta... (intento $attempts)"
+      }
+      Start-Sleep -Milliseconds 800 
+    }
   } while ((Get-Date) -lt $deadline)
-  Write-WarnLine "[${($svc.Name)}] No respondió a tiempo: $url"
+  Write-WarnLine "[${($svc.Name)}] No respondió a tiempo después de $attempts intentos: $url"
   return $false
 }
 
@@ -166,11 +176,11 @@ foreach ($svc in $services) {
   }
 }
 
-Write-Info "=== Resumen ==="
-Write-Info "Servicios lanzados exitosamente:"
+Write-Info \"=== Resumen ===\"
+Write-Info \"Servicios lanzados exitosamente:\"
 foreach ($svc in $launched) {
-  $url = "http://localhost:$($svc.Port)"
-  Write-Ok ("  [OK] {0,-18} -> {1}" -f $svc.Name, $url)
+  $url = \"http://localhost:$($svc.Port)\"
+  Write-Ok (\"  [OK] {0,-24} -> {1}\" -f $svc.Name, $url)
 }
 
 if ($failed.Count -gt 0) {
@@ -180,15 +190,22 @@ if ($failed.Count -gt 0) {
   }
 }
 
-Write-Info "=== PRIMERA ENTREGA LISTA ==="
-Write-Info "Servicios desplegados: Autenticacion + Gestion Herbario + API Gateway + Recepcion + Laboratorio + Interfaces Frontend"
-Write-Info "Casos de uso disponibles:"
-Write-Info "  - Login diferenciado por rol (Recepcionista/Laboratorista)"
-Write-Info "  - Recepcion: Registrar paquetes + muestras + PDFs"
-Write-Info "  - Laboratorio: Clasificacion taxonomica + estados"
-Write-Info "Interfaces disponibles:"
-Write-Info "  - Admin App: http://localhost:5173 (Gestion administrativa)"
-Write-Info "  - Herbario IFN: http://localhost:5176 (Recepcion y Laboratorio)"
+Write-Info \"=== PRIMERA ENTREGA LISTA ===\"
+Write-Info \"Servicios desplegados: Autenticacion + Gestion Herbario + API Gateway + Recepcion + Laboratorio + Servicio Externo + Interfaces Frontend\"
+Write-Info \"Casos de uso disponibles:\"
+Write-Info \"  - Login diferenciado por rol (Recepcionista/Laboratorista/Admin)\"
+Write-Info \"  - Recepcion: Registrar paquetes + muestras\"
+Write-Info \"  - Laboratorio: Clasificacion taxonomica + foto + estados + firma\"
+Write-Info \"  - Admin: Gestion de herbarios, usuarios, regiones, departamentos, municipios\"
+Write-Info \"Interfaces disponibles:\"
+Write-Info \"  - Herbario IFN: http://localhost:5173 (Recepcion, Laboratorio y Admin integrados)\"
+Write-Info \"  - API Gateway: http://localhost:3000 (Orquestador de servicios)\"
+Write-Info \"  - Servicio Externo: http://localhost:4000 (Datos de campo IFN - Conglomerados)\"
 Write-Info ""
-Write-Info "Si iniciaste con ventanas, revisa cada terminal para logs."
-Write-Info "Si usaste -NoWindows, usa Get-Job/Receive-Job/Stop-Job para gestionar procesos."
+if ($Windows) {
+  Write-Info "Servicios ejecutándose en ventanas separadas - revisa cada terminal para logs."
+  Write-Info "Para detener servicios: .\Stop-All-Services.ps1"
+} else {
+  Write-Info "Servicios ejecutándose como jobs en background."
+  Write-Info "Usar Get-Job/Receive-Job/Stop-Job para gestionar procesos, o .\Stop-All-Services.ps1 para detener todo."
+}

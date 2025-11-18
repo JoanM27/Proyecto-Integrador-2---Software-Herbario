@@ -31,18 +31,21 @@ $services = @(
   @{ Name = 'Recepcion_service';    Path = (Join-Path $Root 'Servicios/Recepcion_service') },
   @{ Name = 'Lab_Service';          Path = (Join-Path $Root 'Servicios/Lab_Service') },
   
+  # Servicio EXTERNO
+  @{ Name = 'Servicio_Externo_API'; Path = (Join-Path $Root 'Servicio_Externo_API') },
+  
   # Interfaces FRONTEND
   @{ Name = 'Admin_App';            Path = (Join-Path $Root 'Frontend/Admin_App') },
   @{ Name = 'Herbario_IFN';         Path = (Join-Path $Root 'Frontend/Herbario-ifn') }
 )
 
 # Detener jobs si existen
-$jobs = Get-Job -Name "*Service*" -ErrorAction SilentlyContinue
+$jobs = Get-Job -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "(Service|App|IFN)" }
 if ($jobs) {
   Write-Info "Deteniendo jobs..."
   $jobs | Stop-Job
   $jobs | Remove-Job
-  Write-Ok "Jobs detenidos"
+  Write-Ok "Jobs detenidos: $($jobs.Count) jobs eliminados"
 }
 
 # Puertos de PRIMERA ENTREGA (servicios + interfaces frontend)
@@ -52,38 +55,46 @@ $ports = @(
   3000,  # Api_Gateway - Gateway principal
   3004,  # Recepcion_service - Flujo de recepción
   3005,  # Lab_Service - Clasificación taxonómica
-  5173,  # Frontend Admin_App (Vite dev server)
-  5176   # Frontend Herbario-ifn (Vite dev server)
+  4000,  # Servicio_Externo_API - Datos de campo IFN (Conglomerados)
+  5173,  # Frontend Herbario-ifn (Vite dev server)
+  5174,  # Frontend Admin_App (Vite dev server)
+  5175,  # Frontend Herbario-ifn (puerto alternativo Vite)
+  5176   # Frontend Admin_App (puerto alternativo Vite)
 )
 
 Write-Info "Buscando procesos en puertos: $($ports -join ', ')"
 $processesFound = 0
 
 foreach ($port in $ports) {
-  $connections = netstat -ano | Select-String ":$port " | Select-String "LISTENING"
-  foreach ($conn in $connections) {
-    $parts = $conn.ToString().Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
-    $processId = $parts[-1]
-    if ($processId -match '^\d+$') {
-      try {
-        $process = Get-Process -Id $processId -ErrorAction Stop
-        $processesFound++
-        Write-WarnLine "Puerto $port -> PID $processId ($($process.ProcessName))"
-        
-        if ($Gentle) {
-          Write-Info "  [MODO GENTIL] Proceso encontrado pero no terminado"
-        } else {
-          try {
-            Stop-Process -Id $processId -Force
-            Write-Ok "  [OK] Proceso $processId terminado forzadamente"
-          } catch {
-            Write-WarnLine "  [ERROR] Error terminando proceso $processId`: $($_.Exception.Message)"
+  try {
+    $connections = netstat -ano | Select-String ":$port " | Select-String "LISTENING"
+    foreach ($conn in $connections) {
+      $parts = $conn.ToString().Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+      $processId = $parts[-1]
+      if ($processId -match '^\d+$') {
+        try {
+          $process = Get-Process -Id $processId -ErrorAction Stop
+          $processesFound++
+          Write-WarnLine "Puerto $port -> PID $processId ($($process.ProcessName))"
+          
+          if ($Gentle) {
+            Write-Info "  [MODO GENTIL] Proceso encontrado pero no terminado"
+          } else {
+            try {
+              Stop-Process -Id $processId -Force -ErrorAction Stop
+              Write-Ok "  [OK] Proceso $processId terminado forzadamente"
+              Start-Sleep -Milliseconds 100  # Pequeña pausa para asegurar terminación
+            } catch {
+              Write-WarnLine "  [ERROR] Error terminando proceso $processId`: $($_.Exception.Message)"
+            }
           }
+        } catch {
+          Write-WarnLine "  No se pudo obtener info del proceso $processId (puede que ya haya terminado)"
         }
-      } catch {
-        Write-WarnLine "  No se pudo obtener info del proceso $processId"
       }
     }
+  } catch {
+    Write-WarnLine "Error verificando puerto $port`: $($_.Exception.Message)"
   }
 }
 
@@ -94,16 +105,16 @@ function Remove-NodeModules($services) {
   $failed = 0
   
   foreach ($svc in $services) {
-    if (-not (Test-Path $svc.Path)) {
+    if (-not (Test-Path "$($svc.Path)")) {
       Write-WarnLine "[${($svc.Name)}] Directorio no existe, se omite"
       continue
     }
     
-    $nodeModulesPath = Join-Path $svc.Path 'node_modules'
-    if (Test-Path $nodeModulesPath) {
+    $nodeModulesPath = Join-Path "$($svc.Path)" 'node_modules'
+    if (Test-Path "$nodeModulesPath") {
       try {
         Write-Info "[${($svc.Name)}] Eliminando node_modules..."
-        Remove-Item $nodeModulesPath -Recurse -Force -ErrorAction Stop
+        Remove-Item "$nodeModulesPath" -Recurse -Force -ErrorAction Stop
         Write-Ok "[${($svc.Name)}] [OK] node_modules eliminado"
         $removed++
       } catch {
@@ -128,8 +139,8 @@ if ($Gentle) {
   Write-Info "  .\Scripts\Stop-All-Services.ps1 -KeepNodeModules"
 } else {
   Write-Info "=== PRIMERA ENTREGA - Limpieza de puertos completada ==="
-  Write-Ok "Servicios detenidos: Auth + Gest_Herb + API_Gateway + Recepcion + Lab + Interfaces Frontend"
-  Write-Info "Puertos liberados: 3001, 3002, 3000, 3004, 3005, 5173, 5176"
+  Write-Ok "Servicios detenidos: Auth + Gest_Herb + API_Gateway + Recepcion + Lab + Servicio_Externo + Interfaces Frontend"
+  Write-Info "Puertos liberados: 3001, 3002, 3000, 3004, 3005, 4000, 5173"
   if ($processesFound -eq 0) {
     Write-Ok "Ningun proceso encontrado en los puertos objetivo"
   } else {
