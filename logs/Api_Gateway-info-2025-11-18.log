@@ -1,0 +1,30 @@
+{"timestamp":"2025-11-18T14:43:30.171Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":29340}
+{"timestamp":"2025-11-18T14:43:30.180Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":29340}
+{"timestamp":"2025-11-18T14:43:30.187Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":29340}
+{"timestamp":"2025-11-18T14:43:30.470Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":29340}
+{"timestamp":"2025-11-18T14:51:31.377Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":37800}
+{"timestamp":"2025-11-18T14:51:31.389Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":37800}
+{"timestamp":"2025-11-18T14:51:31.397Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":37800}
+{"timestamp":"2025-11-18T14:51:31.710Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":37800}
+{"timestamp":"2025-11-18T15:24:39.023Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":37800}
+{"timestamp":"2025-11-18T15:24:53.107Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":1356}
+{"timestamp":"2025-11-18T15:24:53.117Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":1356}
+{"timestamp":"2025-11-18T15:58:59.461Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":37800}
+{"timestamp":"2025-11-18T15:59:01.199Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":14984}
+{"timestamp":"2025-11-18T15:59:01.207Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":14984}
+{"timestamp":"2025-11-18T20:05:21.265Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":35604}
+{"timestamp":"2025-11-18T20:05:21.273Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":35604}
+{"timestamp":"2025-11-18T20:05:21.279Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":35604}
+{"timestamp":"2025-11-18T20:05:36.732Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":35604}
+{"timestamp":"2025-11-18T21:11:44.290Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":34292}
+{"timestamp":"2025-11-18T21:11:44.298Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":34292}
+{"timestamp":"2025-11-18T21:11:44.302Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":34292}
+{"timestamp":"2025-11-18T21:11:44.388Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":34292}
+{"timestamp":"2025-11-18T21:20:48.620Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":39696}
+{"timestamp":"2025-11-18T21:20:48.638Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":39696}
+{"timestamp":"2025-11-18T21:20:48.642Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":39696}
+{"timestamp":"2025-11-18T21:20:48.785Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":39696}
+{"timestamp":"2025-11-18T21:38:10.154Z","level":"info","service":"Api_Gateway","message":"Logger inicializado correctamente","pid":14872}
+{"timestamp":"2025-11-18T21:38:10.164Z","level":"info","service":"Api_Gateway","message":"JWT inicializado correctamente","pid":14872}
+{"timestamp":"2025-11-18T21:38:10.171Z","level":"info","service":"Api_Gateway","message":"API Gateway ejecutándose en puerto 3000","url":"http://localhost:3000","pid":14872}
+{"timestamp":"2025-11-18T21:38:47.960Z","level":"info","service":"Api_Gateway","message":"GET /health","method":"GET","path":"/health","ip":"::1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; es-CO) WindowsPowerShell/5.1.26100.7019","pid":14872}

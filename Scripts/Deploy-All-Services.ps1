@@ -176,11 +176,11 @@ foreach ($svc in $services) {
   }
 }
 
-Write-Info \"=== Resumen ===\"
-Write-Info \"Servicios lanzados exitosamente:\"
+Write-Info "=== Resumen ==="
+Write-Info "Servicios lanzados exitosamente:"
 foreach ($svc in $launched) {
-  $url = \"http://localhost:$($svc.Port)\"
-  Write-Ok (\"  [OK] {0,-24} -> {1}\" -f $svc.Name, $url)
+  $url = "http://localhost:$($svc.Port)"
+  Write-Ok ("  [OK] {0,-24} -> {1}" -f $svc.Name, $url)
 }
 
 if ($failed.Count -gt 0) {
@@ -190,17 +190,17 @@ if ($failed.Count -gt 0) {
   }
 }
 
-Write-Info \"=== PRIMERA ENTREGA LISTA ===\"
-Write-Info \"Servicios desplegados: Autenticacion + Gestion Herbario + API Gateway + Recepcion + Laboratorio + Servicio Externo + Interfaces Frontend\"
-Write-Info \"Casos de uso disponibles:\"
-Write-Info \"  - Login diferenciado por rol (Recepcionista/Laboratorista/Admin)\"
-Write-Info \"  - Recepcion: Registrar paquetes + muestras\"
-Write-Info \"  - Laboratorio: Clasificacion taxonomica + foto + estados + firma\"
-Write-Info \"  - Admin: Gestion de herbarios, usuarios, regiones, departamentos, municipios\"
-Write-Info \"Interfaces disponibles:\"
-Write-Info \"  - Herbario IFN: http://localhost:5173 (Recepcion, Laboratorio y Admin integrados)\"
-Write-Info \"  - API Gateway: http://localhost:3000 (Orquestador de servicios)\"
-Write-Info \"  - Servicio Externo: http://localhost:4000 (Datos de campo IFN - Conglomerados)\"
+Write-Info "=== PRIMERA ENTREGA LISTA ==="
+Write-Info "Servicios desplegados: Autenticacion + Gestion Herbario + API Gateway + Recepcion + Laboratorio + Servicio Externo + Interfaces Frontend"
+Write-Info "Casos de uso disponibles:"
+Write-Info "  - Login diferenciado por rol (Recepcionista/Laboratorista/Admin)"
+Write-Info "  - Recepcion: Registrar paquetes + muestras"
+Write-Info "  - Laboratorio: Clasificacion taxonomica + foto + estados + firma"
+Write-Info "  - Admin: Gestion de herbarios, usuarios, regiones, departamentos, municipios"
+Write-Info "Interfaces disponibles:"
+Write-Info "  - Herbario IFN: http://localhost:5173 (Recepcion, Laboratorio y Admin integrados)"
+Write-Info "  - API Gateway: http://localhost:3000 (Orquestador de servicios)"
+Write-Info "  - Servicio Externo: http://localhost:4000 (Datos de campo IFN - Conglomerados)"
 Write-Info ""
 if ($Windows) {
   Write-Info "Servicios ejecutándose en ventanas separadas - revisa cada terminal para logs."

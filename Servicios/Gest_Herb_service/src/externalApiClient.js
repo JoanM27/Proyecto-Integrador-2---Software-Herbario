@@ -73,9 +73,7 @@ export class ExternalApiClient {
     }
 
     return result.data;
-  }
-
-  /**
+  }  /**
    * Obtener información geográfica (municipio/departamento) desde Supabase local
    * @param {number} idMunicipio - ID del municipio
    * @returns {Promise<Object>} Datos de municipio y departamento

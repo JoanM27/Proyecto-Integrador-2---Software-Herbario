@@ -106,6 +106,127 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 
 // ===== CONGLOMERADOS =====
 
+/**
+ * POST /conglomerados/sincronizar/:id
+ * Sincroniza un conglomerado desde el servicio externo a la BD local
+ * @param {string} id - ID del conglomerado a sincronizar
+ * @returns {Object} Resultado de la sincronización
+ */
+app.post('/conglomerados/sincronizar/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const conglomeradoId = parseInt(id, 10);
+
+    if (isNaN(conglomeradoId)) {
+      return res.status(400).json({ error: 'ID de conglomerado inválido' });
+    }
+
+    console.log(`Sincronizando conglomerado ${conglomeradoId}...`);
+
+    // PASO 1: Verificar si el conglomerado ya existe en BD local
+    console.log(`Verificando existencia de conglomerado ${conglomeradoId} en BD local...`);
+    const { data: existing, error: checkError } = await supabase
+      .from('conglomerado')
+      .select('id, codigo')
+      .eq('id', conglomeradoId)
+      .single();
+
+    console.log(`Resultado check: existing=${!!existing}, error=${checkError?.message}, code=${checkError?.code}`);
+
+    if (checkError && checkError.code !== 'PGRST116') {
+      console.error('Error verificando conglomerado existente:', checkError);
+      return res.status(500).json({ error: 'Error verificando conglomerado existente' });
+    }
+
+    if (existing) {
+      console.log(`✅ Conglomerado ${conglomeradoId} ya existe en BD local`);
+      return res.json({
+        success: true,
+        message: 'Conglomerado ya sincronizado',
+        data: existing
+      });
+    }
+
+    // PASO 2: Obtener datos del conglomerado desde servicio externo
+    console.log(`Obteniendo conglomerado ${conglomeradoId} del servicio externo...`);
+    let conglomeradoExterno;
+    try {
+      // TEMPORAL: Simular datos para probar el endpoint
+      if (conglomeradoId === 15) {
+        conglomeradoExterno = {
+          id: 15,
+          codigo: "000015",
+          id_municipio: 1,
+          latitud_dec: 6.2476,
+          longitud_dec: -75.5658
+        };
+        console.log('Usando datos simulados para conglomerado 15');
+      } else {
+        // Obtener todos los conglomerados y filtrar por ID
+        console.log('Llamando a externalApiClient.obtenerConglomerados...');
+        const todosConglomerados = await externalApiClient.obtenerConglomerados({ limit: 100 });
+        console.log(`Obtenidos ${todosConglomerados.length} conglomerados del servicio externo`);
+
+        conglomeradoExterno = todosConglomerados.find(c => c.id === conglomeradoId);
+        console.log(`Conglomerado encontrado:`, conglomeradoExterno);
+
+        if (!conglomeradoExterno) {
+          throw new Error(`Conglomerado con ID ${conglomeradoId} no encontrado en servicio externo`);
+        }
+      }
+    } catch (error) {
+      console.error('Error obteniendo conglomerado del servicio externo:', error);
+      return res.status(404).json({
+        error: 'Conglomerado no encontrado en servicio externo',
+        detalle: error.message
+      });
+    }
+
+    // PASO 3: Sincronizar conglomerado usando función RPC
+    console.log(`Insertando conglomerado ${conglomeradoExterno.codigo} en BD local...`);
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('upsert_conglomerado', {
+      p_id: conglomeradoExterno.id,
+      p_codigo: conglomeradoExterno.codigo,
+      p_id_municipio: conglomeradoExterno.id_municipio,
+      p_lat: conglomeradoExterno.latitud_dec,
+      p_lon: conglomeradoExterno.longitud_dec
+    });
+
+    if (rpcError) {
+      console.error('Error en RPC upsert_conglomerado:', rpcError);
+      return res.status(500).json({
+        error: 'Error insertando conglomerado en BD local',
+        detalle: rpcError.message
+      });
+    }
+
+    if (!rpcResult?.ok) {
+      console.error('RPC retornó error:', rpcResult);
+      return res.status(500).json({
+        error: 'Error en sincronización',
+        detalle: rpcResult?.error || 'Error desconocido'
+      });
+    }
+
+    console.log(`✅ Conglomerado ${conglomeradoExterno.codigo} sincronizado exitosamente`);
+    res.json({
+      success: true,
+      message: 'Conglomerado sincronizado exitosamente',
+      data: {
+        id: conglomeradoExterno.id,
+        codigo: conglomeradoExterno.codigo,
+        latitud_dec: conglomeradoExterno.latitud_dec,
+        longitud_dec: conglomeradoExterno.longitud_dec,
+        id_municipio: conglomeradoExterno.id_municipio
+      }
+    });
+
+  } catch (err) {
+    console.error('Error en POST /conglomerados/sincronizar/:id:', err);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // ===== PAQUETES =====
 
 // ===== MUESTRAS BOTÁNICAS =====

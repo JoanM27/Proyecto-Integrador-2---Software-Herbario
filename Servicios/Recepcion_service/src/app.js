@@ -354,12 +354,13 @@ app.post('/paquetes', async (req, res) => {
     logger.info(`Verificando/sincronizando conglomerado ${paquete.id_conglomerado}`);
     const syncResult = await HerbarioService.sincronizarConglomerado(paquete.id_conglomerado);
     if (!syncResult.success) {
-      logger.error(`Error sincronizando conglomerado ${paquete.id_conglomerado}`, { error: syncResult.error });
+      logger.error(`Error sincronizando conglomerado ${paquete.id_conglomerado}`, { error: syncResult.error, response: syncResult });
       return res.status(500).json({ error: 'Error sincronizando conglomerado: ' + syncResult.error });
     }
-    logger.info(`Conglomerado ${paquete.id_conglomerado} verificado/sincronizado correctamente`);
+    logger.info(`Conglomerado ${paquete.id_conglomerado} verificado/sincronizado correctamente`, { syncResult: syncResult.data, paquete_id_conglomerado: paquete.id_conglomerado });
 
     // 6-7. CREAR PAQUETE Y MUESTRAS EN UNA SOLA TRANSACCIÓN (RPC)
+    logger.info(`Creando paquete con id_conglomerado: ${paquete.id_conglomerado}`);
     const { data: rpcResult, error: rpcError } = await supabase.rpc('crear_paquete_con_muestras', {
       p_paquete: {
         num_paquete: paquete.num_paquete,
@@ -488,10 +489,12 @@ app.get('/conglomerados', async (req, res) => {
     const conglomerados = result.data.map(c => ({
       id: c.id,
       codigo: c.codigo,
-      nombre_completo: `${c.codigo} - ${c.municipio.nombre}, ${c.municipio.departamento.nombre}`,
-      municipio: c.municipio.nombre,
-      departamento: c.municipio.departamento.nombre,
-      region: c.municipio.departamento.region.nombre,
+      nombre_completo: c.municipio 
+        ? `${c.codigo} - ${c.municipio.nombre}, ${c.municipio.departamento?.nombre || 'N/A'}`
+        : `${c.codigo} - Ubicación no disponible`,
+      municipio: c.municipio?.nombre || 'N/A',
+      departamento: c.municipio?.departamento?.nombre || 'N/A',
+      region: c.municipio?.departamento?.region?.nombre || 'N/A',
       latitud: c.latitud_dec,
       longitud: c.longitud_dec
     }));
